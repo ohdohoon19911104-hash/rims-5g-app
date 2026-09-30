@@ -118,13 +118,7 @@ async def get_tat_data():
                 "repairPos": r.get("repair_pos", ""),
                 "shipStatus": r.get("ship_status", ""),
                 "remark": r.get("remark", ""),
-                "pbaIn": clean_date_str(r.get("pba_in")),
-                "pbaOut": clean_date_str(r.get("pba_out")),
-                "pbaOpenClose": r.get("pba_open_close", ""),
                 "flagMark": r.get("flag_mark", ""),
-                "subAlarm": r.get("sub_alarm", ""),
-                "subDate": clean_date_str(r.get("sub_date")),
-                "summaryUse": r.get("summary_use", ""),
                 "reason": r.get("reason", "")
             })
         return result
@@ -151,12 +145,11 @@ async def upload_excel(file: UploadFile = File(...)):
 
             cust = safe_cell(row, 1)
             sn_val = safe_cell(row, 4)
-            repair_in = clean_date_str(safe_cell(row, 9)) or clean_date_str(safe_cell(row, 8))
             
             can_return_raw = safe_cell(row, 22).strip().upper()
             can_return_bool = can_return_raw in ["OK", "O", "TRUE", "1", "YES"]
 
-            # Supabase tat_data 실방 스키마에 존재하는 표준 컬럼만 전송 (PGRST204 에러 원인 필드 전면 제거)
+            # Supabase 실제 18개 컬럼명과 100% 정밀 매핑 (에러 원인 컬럼 모두 제거)
             records.append({
                 "wq": wq_val,
                 "customer": cust,
@@ -165,33 +158,19 @@ async def upload_excel(file: UploadFile = File(...)):
                 "sn": sn_val,
                 "defect_type": safe_cell(row, 5, "Function / Performance Defect"),
                 "over_category": safe_cell(row, 6),
-                "carrier_deadline": safe_cell(row, 7),
-                "req_receive_date": clean_date_str(safe_cell(row, 8)),
-                "req_repair_in_date": repair_in,
-                "ret_repaired_out_date": clean_date_str(safe_cell(row, 10)),
-                "tat13_deadline": safe_cell(row, 12),
                 "status": safe_cell(row, 13),
+                "carrier_deadline": safe_cell(row, 7),
+                "tat13_deadline": safe_cell(row, 12),
+                "period_return_can": can_return_bool,
+                "reason": safe_cell(row, 25),
                 "reproduce_detail": safe_cell(row, 14),
                 "fault_location": safe_cell(row, 15),
                 "sys_manager": safe_cell(row, 17),
-                "pba_name": safe_cell(row, 19),
-                "pba_recv_date": clean_date_str(safe_cell(row, 20)),
-                "pba_re_recv_date": clean_date_str(safe_cell(row, 21)),
-                "period_return_can": can_return_bool,
-                "repair_pos": safe_cell(row, 23),
-                "ship_status": safe_cell(row, 24),
-                "remark": safe_cell(row, 25),
-                "pba_in": clean_date_str(safe_cell(row, 26)),
-                "pba_out": clean_date_str(safe_cell(row, 27)),
-                "pba_open_close": safe_cell(row, 28),
-                "flag_mark": safe_cell(row, 29),
-                "sub_alarm": safe_cell(row, 30),
-                "sub_date": clean_date_str(safe_cell(row, 31)),
-                "summary_use": safe_cell(row, 32)
+                "flag_mark": safe_cell(row, 29)
             })
 
         if records:
-            # 1,000건 단위 고속 분할 upsert
+            # 1,000건 단위 배치 업로드
             batch_size = 1000
             for i in range(0, len(records), batch_size):
                 batch = records[i:i+batch_size]

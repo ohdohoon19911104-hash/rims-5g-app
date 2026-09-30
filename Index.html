@@ -96,7 +96,7 @@
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.5); justify-content: center; align-items: center; z-index: 5000; padding: 20px; }
         .modal-content { background: #fff; padding: 24px; border-radius: 12px; width: 100%; max-width: 500px; border: 1px solid var(--border); max-height: 90vh; overflow-y: auto; }
 
-        /* 부드러운 0% ~ 100% 지속 상승 프로그레스바 */
+        /* 부드러운 0% ~ 100% 지속 상승 프로グレス바 */
         .loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.75); z-index: 9999; justify-content: center; align-items: center; flex-direction: column; color: #fff; font-weight: bold; }
         .progress-box { width: 340px; background: rgba(30, 41, 59, 0.95); padding: 24px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.15); text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
         .progress-title { font-size: 14px; margin-bottom: 14px; font-weight: 800; color: #60a5fa; }
@@ -115,7 +115,7 @@
 </head>
 <body>
 
-    <!-- 부드럽게 멈춤 없이 상승하는 로딩바 오버레이 -->
+    <!-- 부드럽게 멈춤 없이 상승하는 로딩바 오バーレイ -->
     <div id="loadingOverlay" class="loading-overlay">
         <div class="progress-box">
             <div id="progressTitle" class="progress-title">データ処理中...</div>
@@ -436,7 +436,7 @@
         const reproduceOptions1 = ["", "A", "B", "C", "D", "A-B", "A-D", "C-D", "B-C", "A,C", "B,D", "A-B,D", "A-C", "A,D", "B-D"];
         const reproduceOptions2 = ["", "LOW GAIN", "NTF", "OVER POWER,VSWR FAIL", "POWER FAIL", "RSSI FAIL", "CPRI FAIL", "VSWR FAIL", "CLOCK FAIL", "BURNT", "CAL FAIL", "OVER POWER"];
 
-        /* 멈춤 없이 100%까지 꾸준하게 상승하는 프로グレス바 */
+        /* 멈춤 없이 100%까지 꾸준하게 상승하는 로딩바 제어 함수 */
         function showProgressOverlay(title = "データ処理中...") {
             document.getElementById('progressTitle').innerText = title;
             document.getElementById('progressBarFill').style.width = '0%';
@@ -837,7 +837,6 @@
             XLSX.writeFile(wb, `簡易版日報_${new Date().toISOString().split('T')[0]}.xlsx`);
         }
 
-        /* 엑셀 파일 업ロード 처리 함수 */
         async function handleFile(file) {
             if (!file) return;
             showProgressOverlay("Excelファイル同期中...");
@@ -847,7 +846,7 @@
                 const res = await fetch(`${API_BASE}/api/upload-excel`, { method: "POST", body: formData });
                 
                 let data = {};
-                try { data = await res.json(); } catch(e) { data = { detail: "Server HTML Response (Timeout/Error)" }; }
+                try { data = await res.json(); } catch(e) { data = { detail: "Server Response Error" }; }
                 
                 if (res.ok && data.success) {
                     alert("同期完了!"); 
