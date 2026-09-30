@@ -156,7 +156,7 @@ async def upload_excel(file: UploadFile = File(...)):
             can_return_raw = safe_cell(row, 22).strip().upper()
             can_return_bool = can_return_raw in ["OK", "O", "TRUE", "1", "YES"]
 
-            # DB 스키마와 100% 일치하는 정밀 필드 매핑 (center_must -> tat13_deadline 등 수정)
+            # Supabase 실제 DB 스키마 컬럼에 맞추어 center_tat 스키마 충돌 방지 매핑
             records.append({
                 "wq": wq_val,
                 "customer": cust,
@@ -169,7 +169,6 @@ async def upload_excel(file: UploadFile = File(...)):
                 "req_receive_date": clean_date_str(safe_cell(row, 8)),
                 "req_repair_in_date": repair_in,
                 "ret_repaired_out_date": clean_date_str(safe_cell(row, 10)),
-                "center_tat": safe_cell(row, 11),
                 "tat13_deadline": safe_cell(row, 12),
                 "status": safe_cell(row, 13),
                 "reproduce_detail": safe_cell(row, 14),
@@ -194,7 +193,7 @@ async def upload_excel(file: UploadFile = File(...)):
             })
 
         if records:
-            # 500건씩 분할 upsert 수행하여 안정적 저장
+            # 500건씩 분할 배치 업로드
             batch_size = 500
             for i in range(0, len(records), batch_size):
                 batch = records[i:i+batch_size]
