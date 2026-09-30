@@ -208,26 +208,22 @@ async def update_ledger_cell_field(req: LedgerCellFieldUpdate):
         db_field = field_map.get(req.fieldName, req.fieldName)
         bool_val = bool(req.fieldValue) if req.fieldName == "periodReturnCan" else req.fieldValue
 
-        # 1. ledger_data 테이블 업데이트 (period_return_can)
         supabase.table("ledger_data").update({db_field: bool_val}).eq("id", req.rowIdx).execute()
 
-        # 2. tat_data 테이블 연동 업데이트 (기존 컬럼 repair_can 활용: 체크 시 "OK", 해제 시 "")
         if req.fieldName == "periodReturnCan":
-            repair_can_str = "OK" if bool_val else ""
-            res = supabase.table("ledger_data").select("sn_large, sn_small, request_no").eq("id", req.rowIdx).execute()
+            res = supabase.table("ledger_data").select("request_no, sn_large, sn_small").eq("id", req.rowIdx).execute()
             if res.data:
                 item = res.data[0]
+                req_no = str(item.get("request_no") or '').strip()
                 sn_l = str(item.get("sn_large") or '').strip()
                 sn_s = str(item.get("sn_small") or '').strip()
-                req_no = str(item.get("request_no") or '').strip()
                 
-                # tat_data의 기존 컬럼 repair_can 업데이트
-                if sn_l:
-                    supabase.table("tat_data").update({"repair_can": repair_can_str}).eq("sn", sn_l).execute()
-                if sn_s and sn_s != sn_l:
-                    supabase.table("tat_data").update({"repair_can": repair_can_str}).eq("sn", sn_s).execute()
                 if req_no:
-                    supabase.table("tat_data").update({"repair_can": repair_can_str}).eq("wq", req_no).execute()
+                    supabase.table("tat_data").update({"period_return_can": bool_val}).eq("wq", req_no).execute()
+                elif sn_l:
+                    supabase.table("tat_data").update({"period_return_can": bool_val}).eq("sn", sn_l).execute()
+                elif sn_s:
+                    supabase.table("tat_data").update({"period_return_can": bool_val}).eq("sn", sn_s).execute()
 
         return {"success": True}
     except Exception as e:
