@@ -135,7 +135,7 @@ async def get_tat_data():
 @router.post("/upload-excel")
 async def upload_excel(file: UploadFile = File(...)):
     try:
-        df = pd.read_excel(file.file, header=None)
+        df = pd.read_excel(file.file, header=None, engine="openpyxl")
         header_idx = 0
         for idx, row in df.iterrows():
             first_cell = safe_cell(row, 0)
@@ -156,7 +156,7 @@ async def upload_excel(file: UploadFile = File(...)):
             can_return_raw = safe_cell(row, 22).strip().upper()
             can_return_bool = can_return_raw in ["OK", "O", "TRUE", "1", "YES"]
 
-            # Supabase 실제 DB 스키마 컬럼에 맞추어 center_tat 스키마 충돌 방지 매핑
+            # Supabase tat_data DB 스키마 표준 컬럼 매핑 (countermeasure2 칼럼 제외)
             records.append({
                 "wq": wq_val,
                 "customer": cust,
@@ -173,7 +173,6 @@ async def upload_excel(file: UploadFile = File(...)):
                 "status": safe_cell(row, 13),
                 "reproduce_detail": safe_cell(row, 14),
                 "fault_location": safe_cell(row, 15),
-                "countermeasure2": safe_cell(row, 16),
                 "sys_manager": safe_cell(row, 17),
                 "du_ru_type": safe_cell(row, 18),
                 "pba_name": safe_cell(row, 19),
@@ -193,8 +192,8 @@ async def upload_excel(file: UploadFile = File(...)):
             })
 
         if records:
-            # 500건씩 분할 배치 업로드
-            batch_size = 500
+            # 1,000건 단위 배치 업로드
+            batch_size = 1000
             for i in range(0, len(records), batch_size):
                 batch = records[i:i+batch_size]
                 supabase.table("tat_data").upsert(batch, on_conflict="wq").execute()

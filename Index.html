@@ -436,7 +436,7 @@
         const reproduceOptions1 = ["", "A", "B", "C", "D", "A-B", "A-D", "C-D", "B-C", "A,C", "B,D", "A-B,D", "A-C", "A,D", "B-D"];
         const reproduceOptions2 = ["", "LOW GAIN", "NTF", "OVER POWER,VSWR FAIL", "POWER FAIL", "RSSI FAIL", "CPRI FAIL", "VSWR FAIL", "CLOCK FAIL", "BURNT", "CAL FAIL", "OVER POWER"];
 
-        /* 멈춤 없이 0%부터 꾸준하게 상승하는 로딩바 제어 함수 */
+        /* 멈춤 없이 100%까지 꾸준하게 상승하는 로딩바 */
         function showProgressOverlay(title = "データ処理中...") {
             document.getElementById('progressTitle').innerText = title;
             document.getElementById('progressBarFill').style.width = '0%';
@@ -445,14 +445,13 @@
 
             let cur = 0;
             if (progressTimer) clearInterval(progressTimer);
-            // 대용량 처리시간(약 30~45초)에 맞추어 멈춤 없이 1%씩 지속적으로 상승
             progressTimer = setInterval(() => {
                 if (cur < 98) {
                     cur += 1;
                     document.getElementById('progressBarFill').style.width = cur + '%';
                     document.getElementById('progressText').innerText = cur + '%';
                 }
-            }, 350);
+            }, 300);
         }
 
         function hideProgressOverlay() {
@@ -576,7 +575,7 @@
             document.getElementById('viewDashboard').style.display = 'none';
         }
 
-        /* 1초 간격 백그라운드 무음 자동 동기화 */
+        /* 1초 간격 백ググラウンド 무音 자동 동기화 */
         function startAutoPolling() {
             if (autoPollingInterval) clearInterval(autoPollingInterval);
             let pollingTime = 1000;
@@ -633,22 +632,30 @@
 
         async function loadTatData() {
             showProgressOverlay("TATデータ読み込み中...");
-            const res = await fetch(`${API_BASE}/api/tat-data`);
-            cachedTatRawList = await res.json();
-            populateTatFilterOptions(cachedTatRawList);
-            applyTatFilters();
-            hideProgressOverlay();
+            try {
+                const res = await fetch(`${API_BASE}/api/tat-data`);
+                if (res.ok) {
+                    cachedTatRawList = await res.json();
+                    populateTatFilterOptions(cachedTatRawList);
+                    applyTatFilters();
+                }
+            } catch (e) { console.error(e); }
+            finally { hideProgressOverlay(); }
         }
 
         async function loadTatDataSilent() {
-            const res = await fetch(`${API_BASE}/api/tat-data`);
-            const newData = await res.json();
-            if (JSON.stringify(cachedTatRawList) !== JSON.stringify(newData)) {
-                cachedTatRawList = newData;
-                if (document.getElementById('moduleTat').classList.contains('active')) {
-                    applyTatFilters();
+            try {
+                const res = await fetch(`${API_BASE}/api/tat-data`);
+                if (res.ok) {
+                    const newData = await res.json();
+                    if (JSON.stringify(cachedTatRawList) !== JSON.stringify(newData)) {
+                        cachedTatRawList = newData;
+                        if (document.getElementById('moduleTat').classList.contains('active')) {
+                            applyTatFilters();
+                        }
+                    }
                 }
-            }
+            } catch (e) { console.error(e); }
         }
 
         function populateTatFilterOptions(rawList) {
@@ -773,7 +780,7 @@
                 "修理センターの未修理品の全体状況です。", "Customer", "Technical Category", "Product Category(S)", "SEC S/N",
                 "Defect Type", "KDDI,UQ\nTAT(수정)", "KDDI,UQ\nMUST 수리", "REQ] RECEIVE Date", "REQ] REPAIR IN Date",
                 "RET] REPAIRED OUT Date", "修理センター\nTAT(수정)", "修理センター\nMUST 수리", "Status", "Reproduce Detail",
-                "Fault Location", "대策2", " システム担当者", "DU/RU区分\n DU/RU区分", "PBA 名\u3000\nPBA名",
+                "Fault Location", "対策2", " システム担当者", "DU/RU区分\n DU/RU区分", "PBA 名\u3000\nPBA名",
                 "PBA受領日\nPBA受領日", "PBA再受領日\nPBA再受領日", "修理可否\u3000(O, X)", "修理箇所", "修理出荷状況",
                 "備考", "PBA_IN", "PBA_OUT", "PBA_OPENorCLOSE", "フラグ", "代替品アラーム", "代替品検討打診日", "集計用"
             ];
@@ -830,6 +837,7 @@
             XLSX.writeFile(wb, `簡易版日報_${new Date().toISOString().split('T')[0]}.xlsx`);
         }
 
+        /* 엑セル 파일 업로드 함수 - HTML 예외 파싱 처리 */
         async function handleFile(file) {
             if (!file) return;
             showProgressOverlay("Excelファイル同期中...");
@@ -837,7 +845,9 @@
                 const formData = new FormData(); 
                 formData.append("file", file);
                 const res = await fetch(`${API_BASE}/api/upload-excel`, { method: "POST", body: formData });
-                const data = await res.json();
+                
+                let data = {};
+                try { data = await res.json(); } catch(e) { data = { detail: "Server HTML Response (Timeout/Error)" }; }
                 
                 if (res.ok && data.success) {
                     alert("同期完了!"); 
@@ -857,9 +867,12 @@
         async function handleLedgerFile(file) {
             if (!file) return;
             showProgressOverlay("台帳ファイル同期中...");
-            const formData = new FormData(); formData.append("file", file);
-            await fetch(`${API_BASE}/api/upload-ledger-excel`, { method: "POST", body: formData });
-            alert("台帳同期完了!"); loadLedgerData();
+            try {
+                const formData = new FormData(); formData.append("file", file);
+                await fetch(`${API_BASE}/api/upload-ledger-excel`, { method: "POST", body: formData });
+                alert("台帳同期完了!"); loadLedgerData();
+            } catch(e) { alert("エラーが発生しました: " + e.message); }
+            finally { hideProgressOverlay(); }
         }
 
         function switchLedgerSheet(sheetName, btn) {
@@ -871,15 +884,17 @@
 
         async function loadLedgerData() {
             showProgressOverlay("台帳データ読み込み中...");
-            const [ledgerRes, inqRes] = await Promise.all([
-                fetch(`${API_BASE}/api/ledger-data?sheet_name=${currentLedgerSheet}&mode=${currentLedgerSubView}`),
-                fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`)
-            ]);
-            cachedLedgerData = await ledgerRes.json();
-            cachedInquiryData = await inqRes.json();
+            try {
+                const [ledgerRes, inqRes] = await Promise.all([
+                    fetch(`${API_BASE}/api/ledger-data?sheet_name=${currentLedgerSheet}&mode=${currentLedgerSubView}`),
+                    fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`)
+                ]);
+                cachedLedgerData = await ledgerRes.json();
+                cachedInquiryData = await inqRes.json();
 
-            renderLedgerTableUI(cachedLedgerData);
-            hideProgressOverlay();
+                renderLedgerTableUI(cachedLedgerData);
+            } catch(e) { console.error(e); }
+            finally { hideProgressOverlay(); }
         }
 
         function renderLedgerTableUI(data) {
@@ -1163,37 +1178,39 @@
 
         async function loadInquiryData() {
             showProgressOverlay("Q&Aデータ読み込み中...");
-            const res = await fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`);
-            const data = await res.json();
-            cachedInquiryData = data;
+            try {
+                const res = await fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`);
+                const data = await res.json();
+                cachedInquiryData = data;
 
-            document.getElementById('inqKpiTotal').innerText = data.summary.total;
-            document.getElementById('inqKpiOpen').innerText = data.summary.open;
-            document.getElementById('inqKpiClose').innerText = data.summary.close;
-            document.getElementById('inqKpiRate').innerText = data.summary.responseRate + '%';
+                document.getElementById('inqKpiTotal').innerText = data.summary.total;
+                document.getElementById('inqKpiOpen').innerText = data.summary.open;
+                document.getElementById('inqKpiClose').innerText = data.summary.close;
+                document.getElementById('inqKpiRate').innerText = data.summary.responseRate + '%';
 
-            const teamKeys = ["KDDI_RRH", "5G", "UQ_RRH", "BBU", "PICO"];
-            let gridHtml = '';
-            teamKeys.forEach(tKey => {
-                let stat = (data.teamStats && data.teamStats[tKey]) ? data.teamStats[tKey] : { total: 0, open: 0, pendingTeramoto: 0, close: 0 };
-                let pendingTag = stat.pendingTeramoto > 0 ? `<span style="color:#dc2626; font-weight:800; margin-left:4px;">(Teramoto確認待ち: ${stat.pendingTeramoto})</span>` : '';
-                gridHtml += `
-                    <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; border-left: 4px solid #1d4ed8; padding: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
-                        <div style="font-size: 13px; font-weight: 800; color: #0f172a; margin-bottom: 6px;">${tKey}</div>
-                        <div style="font-size: 11px; color: #475569; margin-bottom: 10px; line-height: 1.5;">
-                            総数: <b>${stat.total}</b> 件 ${pendingTag}<br>
-                            OPEN: <b style="color: #d97706;">${stat.open}</b> / CLOSE: <b style="color: #16a34a;">${stat.close}</b>
+                const teamKeys = ["KDDI_RRH", "5G", "UQ_RRH", "BBU", "PICO"];
+                let gridHtml = '';
+                teamKeys.forEach(tKey => {
+                    let stat = (data.teamStats && data.teamStats[tKey]) ? data.teamStats[tKey] : { total: 0, open: 0, pendingTeramoto: 0, close: 0 };
+                    let pendingTag = stat.pendingTeramoto > 0 ? `<span style="color:#dc2626; font-weight:800; margin-left:4px;">(Teramoto確認待ち: ${stat.pendingTeramoto})</span>` : '';
+                    gridHtml += `
+                        <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; border-left: 4px solid #1d4ed8; padding: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+                            <div style="font-size: 13px; font-weight: 800; color: #0f172a; margin-bottom: 6px;">${tKey}</div>
+                            <div style="font-size: 11px; color: #475569; margin-bottom: 10px; line-height: 1.5;">
+                                総数: <b>${stat.total}</b> 件 ${pendingTag}<br>
+                                OPEN: <b style="color: #d97706;">${stat.open}</b> / CLOSE: <b style="color: #16a34a;">${stat.close}</b>
+                            </div>
+                            <div style="display: flex; gap: 6px;">
+                                <button class="btn btn-primary" style="padding: 4px 8px; font-size: 11px;" onclick="viewInqTeamDetail('${tKey}')">詳細を見る →</button>
+                            </div>
                         </div>
-                        <div style="display: flex; gap: 6px;">
-                            <button class="btn btn-primary" style="padding: 4px 8px; font-size: 11px;" onclick="viewInqTeamDetail('${tKey}')">詳細を見る →</button>
-                        </div>
-                    </div>
-                `;
-            });
-            document.getElementById('inqTeamGridContainer').innerHTML = gridHtml;
+                    `;
+                });
+                document.getElementById('inqTeamGridContainer').innerHTML = gridHtml;
 
-            filterAndRenderInquiryTable();
-            hideProgressOverlay();
+                filterAndRenderInquiryTable();
+            } catch(e) { console.error(e); }
+            finally { hideProgressOverlay(); }
         }
 
         function switchInquiryTab(mode, btn) {
@@ -1412,7 +1429,7 @@
         }
 
         function openCreateUserModal() { document.getElementById('createUserModal').style.display = 'flex'; }
-        function closeCreateUserModal() { document.getElementById('closeCreateUserModal').style.display = 'none'; }
+        function closeCreateUserModal() { document.getElementById('createUserModal').style.display = 'none'; }
 
         async function submitCreateUser() {
             const newUserId = document.getElementById('newUserId').value;
