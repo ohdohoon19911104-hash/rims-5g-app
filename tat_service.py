@@ -65,7 +65,6 @@ def calculate_13_working_days_deadline(repair_in_str: str) -> str:
 @router.get("/tat-data")
 async def get_tat_data():
     try:
-        # 원본 소스 코드의 전량(15,000건) 페이징 조회
         all_data = []
         step = 1000
         start = 0
@@ -81,8 +80,10 @@ async def get_tat_data():
         for r in all_data:
             repair_in = clean_date_str(r.get("req_repair_in_date") or r.get("req_receive_date"))
             cust = r.get("customer", "")
-            carrier_dl = r.get("carrier_deadline") or r.get("kddi_uq_must") or calculate_carrier_deadline(repair_in, cust)
-            tat13_dl = r.get("tat13_deadline") or r.get("center_must") or calculate_13_working_days_deadline(repair_in)
+            
+            # DB 저장값 우선 조회 후 없을 시 자동 계산
+            carrier_dl = r.get("carrier_deadline") or calculate_carrier_deadline(repair_in, cust)
+            tat13_dl = r.get("tat13_deadline") or calculate_13_working_days_deadline(repair_in)
             
             p_can = r.get("period_return_can")
             p_can_legacy = r.get("repair_can")
@@ -145,11 +146,23 @@ async def upload_excel(file: UploadFile = File(...)):
 
             cust = safe_cell(row, 1)
             sn_val = safe_cell(row, 4)
+            req_recv_date = clean_date_str(safe_cell(row, 8))
+            req_repair_in_date = clean_date_str(safe_cell(row, 9)) or req_recv_date
+            
+            # 입고일 기준 자동 계산 로직 적용
+            calc_carrier_dl = calculate_carrier_deadline(req_repair_in_date, cust)
+            calc_tat13_dl = calculate_13_working_days_deadline(req_repair_in_date)
+
+            # 엑셀 원본에 이미 계산되어 넘어온 값이 있다면 해당 값 사용, 없으면 직접 계산된 값 사용
+            excel_carrier_dl = safe_cell(row, 7)
+            excel_tat13_dl = safe_cell(row, 12)
+            
+            final_carrier_dl = excel_carrier_dl if excel_carrier_dl and excel_carrier_dl != '-' else calc_carrier_dl
+            final_tat13_dl = excel_tat13_dl if excel_tat13_dl and excel_tat13_dl != '-' else calc_tat13_dl
             
             can_return_raw = safe_cell(row, 22).strip().upper()
             can_return_bool = can_return_raw in ["OK", "O", "TRUE", "1", "YES"]
 
-            # Supabase 실제 18개 컬럼명과 100% 정밀 매핑 (에러 원인 컬럼 모두 제거)
             records.append({
                 "wq": wq_val,
                 "customer": cust,
@@ -159,8 +172,8 @@ async def upload_excel(file: UploadFile = File(...)):
                 "defect_type": safe_cell(row, 5, "Function / Performance Defect"),
                 "over_category": safe_cell(row, 6),
                 "status": safe_cell(row, 13),
-                "carrier_deadline": safe_cell(row, 7),
-                "tat13_deadline": safe_cell(row, 12),
+                "carrier_deadline": final_carrier_dl,  # 자동 계산 또는 정제된 사업자 TAT
+                "tat13_deadline": final_tat13_dl,      # 자동 계산 또는 정제된 13일 TAT
                 "period_return_can": can_return_bool,
                 "reason": safe_cell(row, 25),
                 "reproduce_detail": safe_cell(row, 14),
@@ -170,7 +183,6 @@ async def upload_excel(file: UploadFile = File(...)):
             })
 
         if records:
-            # 1,000건 단위 배치 업로드
             batch_size = 1000
             for i in range(0, len(records), batch_size):
                 batch = records[i:i+batch_size]
