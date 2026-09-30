@@ -156,7 +156,7 @@ async def upload_excel(file: UploadFile = File(...)):
             can_return_raw = safe_cell(row, 22).strip().upper()
             can_return_bool = can_return_raw in ["OK", "O", "TRUE", "1", "YES"]
 
-            # Supabase tat_data DB 스키마 표준 컬럼 매핑 (countermeasure2 칼럼 제외)
+            # Supabase tat_data 실방 스키마에 존재하는 표준 컬럼만 전송 (PGRST204 에러 원인 필드 전면 제거)
             records.append({
                 "wq": wq_val,
                 "customer": cust,
@@ -174,7 +174,6 @@ async def upload_excel(file: UploadFile = File(...)):
                 "reproduce_detail": safe_cell(row, 14),
                 "fault_location": safe_cell(row, 15),
                 "sys_manager": safe_cell(row, 17),
-                "du_ru_type": safe_cell(row, 18),
                 "pba_name": safe_cell(row, 19),
                 "pba_recv_date": clean_date_str(safe_cell(row, 20)),
                 "pba_re_recv_date": clean_date_str(safe_cell(row, 21)),
@@ -192,7 +191,7 @@ async def upload_excel(file: UploadFile = File(...)):
             })
 
         if records:
-            # 1,000건 단위 배치 업로드
+            # 1,000건 단위 고속 분할 upsert
             batch_size = 1000
             for i in range(0, len(records), batch_size):
                 batch = records[i:i+batch_size]
