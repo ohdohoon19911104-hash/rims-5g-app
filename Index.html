@@ -96,7 +96,14 @@
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.5); justify-content: center; align-items: center; z-index: 5000; padding: 20px; }
         .modal-content { background: #fff; padding: 24px; border-radius: 12px; width: 100%; max-width: 500px; border: 1px solid var(--border); max-height: 90vh; overflow-y: auto; }
 
-        .loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.7); z-index: 9999; justify-content: center; align-items: center; flex-direction: column; color: #fff; font-weight: bold; font-size: 16px; }
+        /* 신규 0% ~ 100% 프로그레스바 디자인 */
+        .loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.75); z-index: 9999; justify-content: center; align-items: center; flex-direction: column; color: #fff; font-weight: bold; }
+        .progress-box { width: 320px; background: rgba(255,255,255,0.1); padding: 20px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.2); text-align: center; }
+        .progress-title { font-size: 14px; margin-bottom: 12px; font-weight: 800; color: #60a5fa; }
+        .progress-bar-bg { width: 100%; height: 10px; background: rgba(255,255,255,0.2); border-radius: 5px; overflow: hidden; margin-bottom: 10px; }
+        .progress-bar-fill { width: 0%; height: 100%; background: #3b82f6; transition: width 0.15s ease-out; border-radius: 5px; }
+        .progress-text { font-size: 16px; font-weight: 900; color: #ffffff; }
+
         .system-section { display: none; }
         .system-section.active { display: block; }
         .badge { padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; display: inline-block; }
@@ -108,7 +115,16 @@
 </head>
 <body>
 
-    <div id="loadingOverlay" class="loading-overlay">データ処理中...</div>
+    <!-- 0% ~ 100% 실시간 로딩바 오버레이 -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="progress-box">
+            <div id="progressTitle" class="progress-title">データ処理中...</div>
+            <div class="progress-bar-bg">
+                <div id="progressBarFill" class="progress-bar-fill"></div>
+            </div>
+            <div id="progressText" class="progress-text">0%</div>
+        </div>
+    </div>
 
     <div id="viewLogin" class="login-wrapper">
         <div class="login-card">
@@ -409,6 +425,7 @@
         let autoPollingInterval = null;
         let lastInteractionTime = 0;
         let cellUpdateDebounceTimer = null;
+        let progressTimer = null;
 
         document.addEventListener('mousedown', () => { lastInteractionTime = Date.now(); }, true);
         document.addEventListener('mousemove', () => { lastInteractionTime = Date.now(); }, true);
@@ -419,8 +436,35 @@
         const reproduceOptions1 = ["", "A", "B", "C", "D", "A-B", "A-D", "C-D", "B-C", "A,C", "B,D", "A-B,D", "A-C", "A,D", "B-D"];
         const reproduceOptions2 = ["", "LOW GAIN", "NTF", "OVER POWER,VSWR FAIL", "POWER FAIL", "RSSI FAIL", "CPRI FAIL", "VSWR FAIL", "CLOCK FAIL", "BURNT", "CAL FAIL", "OVER POWER"];
 
-        function showProgressOverlay() { document.getElementById('loadingOverlay').style.display = 'flex'; }
-        function hideProgressOverlay() { document.getElementById('loadingOverlay').style.display = 'none'; }
+        /* 0% ~ 100% 프로그레스바 제어 함수 */
+        function showProgressOverlay(title = "データ処理中...") {
+            document.getElementById('progressTitle').innerText = title;
+            document.getElementById('progressBarFill').style.width = '0%';
+            document.getElementById('progressText').innerText = '0%';
+            document.getElementById('loadingOverlay').style.display = 'flex';
+
+            let cur = 0;
+            if (progressTimer) clearInterval(progressTimer);
+            progressTimer = setInterval(() => {
+                if (cur < 90) {
+                    cur += Math.floor(Math.random() * 8) + 3;
+                    if (cur > 90) cur = 90;
+                    document.getElementById('progressBarFill').style.width = cur + '%';
+                    document.getElementById('progressText').innerText = cur + '%';
+                }
+            }, 100);
+        }
+
+        function hideProgressOverlay() {
+            if (progressTimer) clearInterval(progressTimer);
+            document.getElementById('progressBarFill').style.width = '100%';
+            document.getElementById('progressText').innerText = '100%';
+            setTimeout(() => {
+                document.getElementById('loadingOverlay').style.display = 'none';
+                document.getElementById('progressBarFill').style.width = '0%';
+                document.getElementById('progressText').innerText = '0%';
+            }, 250);
+        }
 
         function rawVal(v) {
             if (v === null || v === undefined) return '';
@@ -532,10 +576,10 @@
             document.getElementById('viewDashboard').style.display = 'none';
         }
 
-        /* 1초 간격 백ググラウンド 무音 자동 동기화 (TAT 수信) */
+        /* 1초 간격 백그라운드 무음 자동 동기화 */
         function startAutoPolling() {
             if (autoPollingInterval) clearInterval(autoPollingInterval);
-            let pollingTime = 1000; // 1초 단위 설정
+            let pollingTime = 1000;
 
             autoPollingInterval = setInterval(() => {
                 if (!currentUserSession) return;
@@ -544,7 +588,7 @@
 
                 if (isUserTyping) return;
 
-                loadTatDataSilent(); // 수리 TAT 진척관리 1초 실시간 수신
+                loadTatDataSilent();
             }, pollingTime);
         }
 
@@ -588,7 +632,7 @@
         }
 
         async function loadTatData() {
-            showProgressOverlay();
+            showProgressOverlay("TATデータ読み込み中...");
             const res = await fetch(`${API_BASE}/api/tat-data`);
             cachedTatRawList = await res.json();
             populateTatFilterOptions(cachedTatRawList);
@@ -596,7 +640,6 @@
             hideProgressOverlay();
         }
 
-        /* 1초마다 백그라운드에서 실時間 화면을 갱신하는 무音 함수 */
         async function loadTatDataSilent() {
             const res = await fetch(`${API_BASE}/api/tat-data`);
             const newData = await res.json();
@@ -689,7 +732,6 @@
 
             document.getElementById('kpiTotal').innerText = filteredList.length.toLocaleString() + "件";
             
-            // 수리 TAT 진척관리 체크박스 가시성 강조 (선名한 파란색 ✔ OK 뱃지)
             document.getElementById('tatTableBody').innerHTML = filteredList.map(i => {
                 let isChecked = i.periodReturnCan;
                 let chkElem = isChecked ? 
@@ -788,10 +830,9 @@
             XLSX.writeFile(wb, `簡易版日報_${new Date().toISOString().split('T')[0]}.xlsx`);
         }
 
-        /* 엑셀 파일 업ロード 처리 함수 - 에러 메시지 정상 핸들링 보완 */
         async function handleFile(file) {
             if (!file) return;
-            showProgressOverlay();
+            showProgressOverlay("Excelファイル同期中...");
             try {
                 const formData = new FormData(); 
                 formData.append("file", file);
@@ -815,7 +856,7 @@
 
         async function handleLedgerFile(file) {
             if (!file) return;
-            showProgressOverlay();
+            showProgressOverlay("台帳ファイル同期中...");
             const formData = new FormData(); formData.append("file", file);
             await fetch(`${API_BASE}/api/upload-ledger-excel`, { method: "POST", body: formData });
             alert("台帳同期完了!"); loadLedgerData();
@@ -829,7 +870,7 @@
         }
 
         async function loadLedgerData() {
-            showProgressOverlay();
+            showProgressOverlay("台帳データ読み込み中...");
             const [ledgerRes, inqRes] = await Promise.all([
                 fetch(`${API_BASE}/api/ledger-data?sheet_name=${currentLedgerSheet}&mode=${currentLedgerSubView}`),
                 fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`)
@@ -1121,7 +1162,7 @@
         }
 
         async function loadInquiryData() {
-            showProgressOverlay();
+            showProgressOverlay("Q&Aデータ読み込み中...");
             const res = await fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`);
             const data = await res.json();
             cachedInquiryData = data;

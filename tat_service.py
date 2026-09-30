@@ -81,8 +81,8 @@ async def get_tat_data():
         for r in all_data:
             repair_in = clean_date_str(r.get("req_repair_in_date") or r.get("req_receive_date"))
             cust = r.get("customer", "")
-            carrier_dl = r.get("kddi_uq_must") or calculate_carrier_deadline(repair_in, cust)
-            tat13_dl = r.get("center_must") or calculate_13_working_days_deadline(repair_in)
+            carrier_dl = r.get("carrier_deadline") or r.get("kddi_uq_must") or calculate_carrier_deadline(repair_in, cust)
+            tat13_dl = r.get("tat13_deadline") or r.get("center_must") or calculate_13_working_days_deadline(repair_in)
             
             p_can = r.get("period_return_can")
             p_can_legacy = r.get("repair_can")
@@ -153,10 +153,10 @@ async def upload_excel(file: UploadFile = File(...)):
             sn_val = safe_cell(row, 4)
             repair_in = clean_date_str(safe_cell(row, 9)) or clean_date_str(safe_cell(row, 8))
             
-            # W열(Col 22: 수리가능여부) 문자열을 Boolean 타입으로 변환하여 Supabase bool 타입 충돌 수정
             can_return_raw = safe_cell(row, 22).strip().upper()
             can_return_bool = can_return_raw in ["OK", "O", "TRUE", "1", "YES"]
 
+            # DB 스키마와 100% 일치하는 정밀 필드 매핑 (center_must -> tat13_deadline 등 수정)
             records.append({
                 "wq": wq_val,
                 "customer": cust,
@@ -165,12 +165,12 @@ async def upload_excel(file: UploadFile = File(...)):
                 "sn": sn_val,
                 "defect_type": safe_cell(row, 5, "Function / Performance Defect"),
                 "over_category": safe_cell(row, 6),
-                "kddi_uq_must": safe_cell(row, 7),
+                "carrier_deadline": safe_cell(row, 7),
                 "req_receive_date": clean_date_str(safe_cell(row, 8)),
                 "req_repair_in_date": repair_in,
                 "ret_repaired_out_date": clean_date_str(safe_cell(row, 10)),
                 "center_tat": safe_cell(row, 11),
-                "center_must": safe_cell(row, 12),
+                "tat13_deadline": safe_cell(row, 12),
                 "status": safe_cell(row, 13),
                 "reproduce_detail": safe_cell(row, 14),
                 "fault_location": safe_cell(row, 15),
@@ -180,7 +180,7 @@ async def upload_excel(file: UploadFile = File(...)):
                 "pba_name": safe_cell(row, 19),
                 "pba_recv_date": clean_date_str(safe_cell(row, 20)),
                 "pba_re_recv_date": clean_date_str(safe_cell(row, 21)),
-                "period_return_can": can_return_bool, # Boolean 타입 전송
+                "period_return_can": can_return_bool,
                 "repair_pos": safe_cell(row, 23),
                 "ship_status": safe_cell(row, 24),
                 "remark": safe_cell(row, 25),
@@ -194,7 +194,7 @@ async def upload_excel(file: UploadFile = File(...)):
             })
 
         if records:
-            # 500건씩 분할 upsert 수행하여 대용량 업로드 시 DB 페이로드 제한 초과 방지
+            # 500건씩 분할 upsert 수행하여 안정적 저장
             batch_size = 500
             for i in range(0, len(records), batch_size):
                 batch = records[i:i+batch_size]
