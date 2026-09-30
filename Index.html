@@ -31,9 +31,12 @@
         .app-container { display: flex; width: 100vw; height: 100vh; overflow: hidden; position: relative; }
         .sidebar { display: none; position: fixed; top: 0; left: 0; width: 64px; height: 100vh; background-color: var(--sidebar-bg); z-index: 1000; flex-direction: column; align-items: center; padding-top: 16px; border-right: 1px solid rgba(255,255,255,0.1); }
         .sidebar.active { display: flex; }
-        .sidebar-brand { color: #fff; font-size: 20px; margin-bottom: 24px; cursor: pointer; }
+        .sidebar-brand { color: #fff; font-size: 20px; margin-bottom: 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .sidebar-brand:hover svg { fill: #ffffff; }
         
-        .main-content { flex: 1; padding: 20px; height: 100vh; overflow-y: auto; overflow-x: hidden; margin-left: 64px; }
+        .main-content { flex: 1; padding: 20px; height: 100vh; overflow-y: auto; overflow-x: hidden; margin-left: 0; transition: margin-left 0.2s; }
+        .main-content.has-sidebar { margin-left: 64px; }
+        
         .portal-wrapper { max-width: 1200px; margin: 0 auto; }
         .portal-banner { background: #0f2744; border-radius: 12px; padding: 36px; color: #fff; margin-bottom: 28px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         .portal-title h2 { font-size: 11px; text-transform: uppercase; color: #60a5fa; letter-spacing: 1px; margin-bottom: 6px; }
@@ -57,6 +60,10 @@
         .tabs { display: flex; gap: 8px; border-bottom: 2px solid var(--border); margin-bottom: 16px; }
         .tab-btn { padding: 8px 16px; border: none; background: transparent; font-size: 13px; font-weight: 800; color: var(--text-sub); cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px; }
         .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); background: #ffffff; border-radius: 6px 6px 0 0; }
+
+        .ledger-sub-toggle { display: flex; gap: 4px; margin-bottom: 12px; background: #e2e8f0; padding: 3px; border-radius: 6px; width: fit-content; }
+        .ledger-sub-btn { padding: 5px 12px; font-size: 11px; font-weight: 700; border: none; border-radius: 4px; background: transparent; color: #475569; cursor: pointer; transition: all 0.2s; }
+        .ledger-sub-btn.active { background: #ffffff; color: var(--primary); shadow: 0 1px 2px rgba(0,0,0,0.1); }
 
         .right-table-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; overflow-x: auto; overflow-y: visible; min-height: 500px; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
         
@@ -101,12 +108,19 @@
     </div>
 
     <div id="viewDashboard" class="app-container" style="display:none;">
-        <aside id="mainSidebar" class="sidebar active">
+        <!-- 사이드바 (포털/홈 화면에서는 숨김 처리됨) -->
+        <aside id="mainSidebar" class="sidebar">
             <div class="sidebar-brand" title="ホーム" onclick="switchSystemModule('home')">
                 <svg viewBox="0 0 24 24" width="24" height="24" fill="#ffffff"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
             </div>
-            <div class="sidebar-brand" title="管理台帳" onclick="switchSystemModule('ledger')" style="margin-top:16px;">
+            <div class="sidebar-brand" title="TAT進捗" onclick="switchSystemModule('tat')">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="#94a3b8"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
+            </div>
+            <div class="sidebar-brand" title="管理台帳" onclick="switchSystemModule('ledger')">
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="#94a3b8"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+            </div>
+            <div class="sidebar-brand" title="問い合わせ" onclick="switchSystemModule('inquiry')">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="#94a3b8"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"/></svg>
             </div>
             <div class="sidebar-brand" title="ログアウト" onclick="handleLogout()" style="margin-top:auto; margin-bottom:20px;">
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="#94a3b8"><path d="M10.09 15.59L11.5 17l5-5-4.5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5c-1.11 0-2 .9-2 2v4h2V5h14v14H5v-4H3v4c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
@@ -186,7 +200,7 @@
             </div>
 
             <div id="moduleLedger" class="system-section">
-                <header style="display:flex; justify-content:space-between; margin-bottom:16px; align-items:flex-start;">
+                <header style="display:flex; justify-content:space-between; margin-bottom:12px; align-items:flex-start;">
                     <div>
                         <h1 id="ledgerModuleTitle" style="font-size:22px; font-weight:800;">入庫管理台帳 システム (進行中)</h1>
                         <p style="color:var(--text-sub); font-size:12px; margin-top:2px;">自動シート振り分け・重複スキップ・TAT自動算出・docomo項目対応</p>
@@ -196,7 +210,13 @@
                         <button class="btn btn-fetch" onclick="loadLedgerData()">台帳データ読み込み</button>
                     </div>
                 </header>
-                
+
+                <!-- 관리대장 진행중 / 출고완료 서브 탭 토글 -->
+                <div class="ledger-sub-toggle">
+                    <button id="subBtnInProgress" class="ledger-sub-btn active" onclick="switchLedgerSubView('in_progress')">• 入庫管理 (進行中)</button>
+                    <button id="subBtnCompleted" class="ledger-sub-btn" onclick="switchLedgerSubView('completed')">• 出荷完了台帳 (完了分)</button>
+                </div>
+
                 <div class="tabs">
                     <button class="tab-btn ledger-tab-btn active" onclick="switchLedgerSheet('BBU', this)">BBU</button>
                     <button class="tab-btn ledger-tab-btn" onclick="switchLedgerSheet('PICO', this)">PICO</button>
@@ -207,7 +227,7 @@
                 </div>
 
                 <div class="right-table-card">
-                    <div style="margin-bottom:12px;"><h3 style="font-size:14px; font-weight:800; color:#0f172a;">入庫管理台帳 一覧</h3></div>
+                    <div style="margin-bottom:12px;"><h3 id="ledgerSubTitle" style="font-size:14px; font-weight:800; color:#0f172a;">入庫管理台帳 一覧 (進行中)</h3></div>
                     <table>
                         <thead id="ledgerTableHead"></thead>
                         <tbody id="ledgerTableBody"></tbody>
@@ -349,6 +369,7 @@
         const API_BASE = window.location.origin;
         let currentUserSession = null;
         let currentLedgerSheet = 'BBU';
+        let currentLedgerSubView = 'in_progress'; // 'in_progress' or 'completed'
         let cachedLedgerData = [];
         let cachedTatRawList = [];
         let cachedInquiryData = null;
@@ -466,6 +487,18 @@
                 moduleName = 'ledger';
             }
 
+            const sidebar = document.getElementById('mainSidebar');
+            const mainContent = document.getElementById('mainContent');
+
+            // 포털 화면(home)일 때는 사이드바 숨김
+            if (moduleName === 'home') {
+                sidebar.classList.remove('active');
+                mainContent.classList.remove('has-sidebar');
+            } else {
+                sidebar.classList.add('active');
+                mainContent.classList.add('has-sidebar');
+            }
+
             document.querySelectorAll('.system-section').forEach(el => el.classList.remove('active'));
             if (moduleName === 'home') document.getElementById('moduleHome').classList.add('active');
             else if (moduleName === 'tat') { document.getElementById('moduleTat').classList.add('active'); loadTatData(); }
@@ -508,29 +541,24 @@
             if (curVal) select.value = curVal;
         }
 
-        // [핵심 교정] 화면의 '超過区分' (centerTat) 열 수치를 직접 기준으로 초과 판별
         function isTatOverConditionMatched(item, condition) {
             if (condition === 'ALL') return true;
             
-            // RET] REPAIRED OUT 및 RET] CUST H/O 완료 건은 TAT 초과 필터 대상에서 제외
             let statusUpper = String(item.status || '').toUpperCase().trim();
             if (statusUpper === 'RET] REPAIRED OUT' || statusUpper === 'RET] CUST H/O') {
                 return false;
             }
 
-            // 화면에 표시되는 '超過区分' (centerTat / 11번 열) 수치를 읽어옴
             let overValueStr = item.centerTat || item.overCategory || '0';
             let overDays = parseInt(overValueStr, 10);
             if (isNaN(overDays)) overDays = 0;
 
             if (condition === 'TAT13_OVER') {
-                // 超過区分 수치가 13일(포함) 이상
                 return overDays >= 13;
             } 
             else if (condition === 'CARRIER_OVER') {
-                // 超過区分 수치를 사업자별 기준(DOCOMO:30 / NEC:45 / KDDI:60 / UQ:90)과 비교
                 let cust = String(item.customer || '').toUpperCase().trim();
-                let limit = 30; // 기본값
+                let limit = 30;
                 if (cust.includes("DOCOMO")) limit = 30;
                 else if (cust.includes("NEC")) limit = 45;
                 else if (cust.includes("KDDI")) limit = 60;
@@ -558,7 +586,6 @@
                 let displayOver = item.centerTat || item.overCategory || '-';
                 if (selOverCat !== 'ALL' && displayOver !== selOverCat) return false;
                 
-                // 화면의 超過区分 표시 수치 기준으로 초과 판별 (완료 건 제외)
                 if (!isTatOverConditionMatched(item, selTatCond)) return false;
 
                 let isCompleted = (item.status && item.status.toUpperCase() === 'RET] CUST H/O');
@@ -681,6 +708,23 @@
             alert("台帳同期完了!"); loadLedgerData();
         }
 
+        function switchLedgerSubView(mode) {
+            currentLedgerSubView = mode;
+            document.getElementById('subBtnInProgress').classList.toggle('active', mode === 'in_progress');
+            document.getElementById('subBtnCompleted').classList.toggle('active', mode === 'completed');
+            
+            const titleEl = document.getElementById('ledgerModuleTitle');
+            const subTitleEl = document.getElementById('ledgerSubTitle');
+            if (mode === 'in_progress') {
+                titleEl.innerText = "入庫管理台帳 システム (進行中)";
+                subTitleEl.innerText = "入庫管理台帳 一覧 (進行中)";
+            } else {
+                titleEl.innerText = "出荷完了台帳 システム (完了分)";
+                subTitleEl.innerText = "出荷完了台帳 一覧 (完了分)";
+            }
+            loadLedgerData();
+        }
+
         function switchLedgerSheet(sheetName, btn) {
             currentLedgerSheet = sheetName;
             document.querySelectorAll('.ledger-tab-btn').forEach(el => el.classList.remove('active'));
@@ -691,7 +735,7 @@
         async function loadLedgerData() {
             showProgressOverlay();
             const [ledgerRes, inqRes] = await Promise.all([
-                fetch(`${API_BASE}/api/ledger-data?sheet_name=${currentLedgerSheet}`),
+                fetch(`${API_BASE}/api/ledger-data?sheet_name=${currentLedgerSheet}&mode=${currentLedgerSubView}`),
                 fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`)
             ]);
             cachedLedgerData = await ledgerRes.json();
@@ -703,7 +747,7 @@
 
         async function loadLedgerDataSilent() {
             const [ledgerRes, inqRes] = await Promise.all([
-                fetch(`${API_BASE}/api/ledger-data?sheet_name=${currentLedgerSheet}`),
+                fetch(`${API_BASE}/api/ledger-data?sheet_name=${currentLedgerSheet}&mode=${currentLedgerSubView}`),
                 fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`)
             ]);
             const newLedger = await ledgerRes.json();
@@ -736,6 +780,11 @@
 
             const fullStatusMap = (cachedInquiryData && cachedInquiryData.fullStatusMap) ? cachedInquiryData.fullStatusMap : {};
             const textareaStyle = 'width:100%; min-width:160px; height:38px; padding:4px 6px; border:1px solid var(--border); border-radius:4px; font-size:11px; outline:none; resize:both;';
+
+            if (!data || data.length === 0) {
+                document.getElementById('ledgerTableBody').innerHTML = `<tr><td colspan="30" style="text-align:center;">データがありません。</td></tr>`;
+                return;
+            }
 
             document.getElementById('ledgerTableBody').innerHTML = data.map(item => {
                 const snKey = (rawVal(item.snLarge) || rawVal(item.snSmall) || '').replace(/\s+/g, '').trim();
