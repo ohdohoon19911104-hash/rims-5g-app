@@ -532,10 +532,10 @@
             document.getElementById('viewDashboard').style.display = 'none';
         }
 
-        /* 1초 간격 백그라운드 무음 자동 동기화 (TAT 수신) */
+        /* 1초 간격 백ググラウンド 무音 자동 동기화 (TAT 수信) */
         function startAutoPolling() {
             if (autoPollingInterval) clearInterval(autoPollingInterval);
-            let pollingTime = 1000;
+            let pollingTime = 1000; // 1초 단위 설정
 
             autoPollingInterval = setInterval(() => {
                 if (!currentUserSession) return;
@@ -596,7 +596,7 @@
             hideProgressOverlay();
         }
 
-        /* 1초마다 백그라운드에서 실시간 화면을 갱신하는 무소음 함수 */
+        /* 1초마다 백그라운드에서 실時間 화면을 갱신하는 무音 함수 */
         async function loadTatDataSilent() {
             const res = await fetch(`${API_BASE}/api/tat-data`);
             const newData = await res.json();
@@ -689,7 +689,7 @@
 
             document.getElementById('kpiTotal').innerText = filteredList.length.toLocaleString() + "件";
             
-            // 수리 TAT 진척관리 체크박스 가시성 강조 (선명한 파란색 ✔ OK 뱃지)
+            // 수리 TAT 진척관리 체크박스 가시성 강조 (선名한 파란색 ✔ OK 뱃지)
             document.getElementById('tatTableBody').innerHTML = filteredList.map(i => {
                 let isChecked = i.periodReturnCan;
                 let chkElem = isChecked ? 
@@ -731,7 +731,7 @@
                 "修理センターの未修理品の全体状況です。", "Customer", "Technical Category", "Product Category(S)", "SEC S/N",
                 "Defect Type", "KDDI,UQ\nTAT(수정)", "KDDI,UQ\nMUST 수리", "REQ] RECEIVE Date", "REQ] REPAIR IN Date",
                 "RET] REPAIRED OUT Date", "修理センター\nTAT(수정)", "修理センター\nMUST 수리", "Status", "Reproduce Detail",
-                "Fault Location", "대책2", " システム担当者", "DU/RU区分\n DU/RU区分", "PBA 名\u3000\nPBA名",
+                "Fault Location", "대策2", " システム担当者", "DU/RU区分\n DU/RU区分", "PBA 名\u3000\nPBA名",
                 "PBA受領日\nPBA受領日", "PBA再受領日\nPBA再受領日", "修理可否\u3000(O, X)", "修理箇所", "修理出荷状況",
                 "備考", "PBA_IN", "PBA_OUT", "PBA_OPENorCLOSE", "フラグ", "代替品アラーム", "代替品検討打診日", "集計用"
             ];
@@ -788,7 +788,7 @@
             XLSX.writeFile(wb, `簡易版日報_${new Date().toISOString().split('T')[0]}.xlsx`);
         }
 
-        /* 엑셀 파일 업로드 처리 함수 - 에러 메시지 정상 핸들링 보완 */
+        /* 엑셀 파일 업ロード 처리 함수 - 에러 메시지 정상 핸들링 보완 */
         async function handleFile(file) {
             if (!file) return;
             showProgressOverlay();

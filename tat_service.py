@@ -153,7 +153,7 @@ async def upload_excel(file: UploadFile = File(...)):
             sn_val = safe_cell(row, 4)
             repair_in = clean_date_str(safe_cell(row, 9)) or clean_date_str(safe_cell(row, 8))
             
-            # W열(Col 22: 수리가능여부) 문자열을 Boolean 타입으로 변환하여 DB 에러 수정
+            # W열(Col 22: 수리가능여부) 문자열을 Boolean 타입으로 변환하여 Supabase bool 타입 충돌 수정
             can_return_raw = safe_cell(row, 22).strip().upper()
             can_return_bool = can_return_raw in ["OK", "O", "TRUE", "1", "YES"]
 
@@ -180,7 +180,7 @@ async def upload_excel(file: UploadFile = File(...)):
                 "pba_name": safe_cell(row, 19),
                 "pba_recv_date": clean_date_str(safe_cell(row, 20)),
                 "pba_re_recv_date": clean_date_str(safe_cell(row, 21)),
-                "period_return_can": can_return_bool,
+                "period_return_can": can_return_bool, # Boolean 타입 전송
                 "repair_pos": safe_cell(row, 23),
                 "ship_status": safe_cell(row, 24),
                 "remark": safe_cell(row, 25),
@@ -194,7 +194,7 @@ async def upload_excel(file: UploadFile = File(...)):
             })
 
         if records:
-            # 500건씩 분할 upsert 수행
+            # 500건씩 분할 upsert 수행하여 대용량 업로드 시 DB 페이로드 제한 초과 방지
             batch_size = 500
             for i in range(0, len(records), batch_size):
                 batch = records[i:i+batch_size]
