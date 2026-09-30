@@ -89,10 +89,6 @@
 
         select:disabled, input:disabled { opacity: 1 !important; -webkit-text-fill-color: inherit !important; }
 
-        input[type="checkbox"].custom-chk {
-            width: 16px; height: 16px; cursor: pointer; accent-color: #1d4ed8;
-        }
-
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.5); justify-content: center; align-items: center; z-index: 5000; padding: 20px; }
         .modal-content { background: #fff; padding: 24px; border-radius: 12px; width: 100%; max-width: 500px; border: 1px solid var(--border); max-height: 90vh; overflow-y: auto; }
 
@@ -532,23 +528,23 @@
             document.getElementById('viewDashboard').style.display = 'none';
         }
 
-        /* 1초 간격 백그라운드 무音 자동 동기화 (TAT 수信) */
         function startAutoPolling() {
             if (autoPollingInterval) clearInterval(autoPollingInterval);
-            let pollingTime = 1000;
+            let pollingTime = 3000;
 
             autoPollingInterval = setInterval(() => {
                 if (!currentUserSession) return;
                 let activeEl = document.activeElement;
                 let isUserTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT');
+                let isRecentlyClicked = (Date.now() - lastInteractionTime < 2500);
 
-                if (isUserTyping) return;
+                if (isUserTyping || isRecentlyClicked) return;
 
-                loadTatDataSilent();
+                loadInquiryDataSilent();
+                loadLedgerDataSilent();
             }, pollingTime);
         }
 
-        // 모듈 전환 시 로ディング 딜레이 없이 즉시 화면 전환
         function switchSystemModule(moduleName) {
             if (currentUserSession && currentUserSession.role === 'TERAMOTO_STAFF' && moduleName !== 'ledger') {
                 moduleName = 'ledger';
@@ -566,22 +562,10 @@
             }
 
             document.querySelectorAll('.system-section').forEach(el => el.classList.remove('active'));
-            
-            if (moduleName === 'home') {
-                document.getElementById('moduleHome').classList.add('active');
-            } else if (moduleName === 'tat') { 
-                document.getElementById('moduleTat').classList.add('active'); 
-                // 로딩 레이어 없이 메모리 데이터로 화면 즉시 UI 렌더링
-                applyTatFilters();
-                // 백그라운드 최신 데이터 수신
-                loadTatDataSilent();
-            } else if (moduleName === 'ledger') { 
-                document.getElementById('moduleLedger').classList.add('active'); 
-                loadLedgerData(); 
-            } else if (moduleName === 'inquiry') { 
-                document.getElementById('moduleInquiry').classList.add('active'); 
-                loadInquiryData(); 
-            }
+            if (moduleName === 'home') document.getElementById('moduleHome').classList.add('active');
+            else if (moduleName === 'tat') { document.getElementById('moduleTat').classList.add('active'); loadTatData(); }
+            else if (moduleName === 'ledger') { document.getElementById('moduleLedger').classList.add('active'); loadLedgerData(); }
+            else if (moduleName === 'inquiry') { document.getElementById('moduleInquiry').classList.add('active'); loadInquiryData(); }
         }
 
         function switchLedgerSubView(mode) {
@@ -607,17 +591,6 @@
             populateTatFilterOptions(cachedTatRawList);
             applyTatFilters();
             hideProgressOverlay();
-        }
-
-        async function loadTatDataSilent() {
-            const res = await fetch(`${API_BASE}/api/tat-data`);
-            const newData = await res.json();
-            if (JSON.stringify(cachedTatRawList) !== JSON.stringify(newData)) {
-                cachedTatRawList = newData;
-                if (document.getElementById('moduleTat').classList.contains('active')) {
-                    applyTatFilters();
-                }
-            }
         }
 
         function populateTatFilterOptions(rawList) {
@@ -701,28 +674,22 @@
 
             document.getElementById('kpiTotal').innerText = filteredList.length.toLocaleString() + "件";
             
-            document.getElementById('tatTableBody').innerHTML = filteredList.map(i => {
-                let isChecked = i.periodReturnCan;
-                let chkElem = isChecked ? 
-                    `<span class="badge badge-primary" style="background:#1d4ed8; color:#ffffff; padding:4px 8px; border-radius:4px; font-weight:800;">✔ OK</span>` : 
-                    `<input type="checkbox" class="custom-chk" disabled>`;
-
-                return `
-                    <tr>
-                        <td><b>${i.wq}</b></td>
-                        <td>${i.customer}</td>
-                        <td><b style="color:var(--purple);">${i.techCategory}</b></td>
-                        <td>${i.productCategory}</td>
-                        <td><b>${i.sn}</b></td>
-                        <td>${i.centerTat || i.overCategory || '-'}</td>
-                        <td>${i.status}</td>
-                        <td><b>${cleanVal(i.kddiUqMust || i.carrierDeadline)}</b></td>
-                        <td><b>${cleanVal(i.centerMust || i.tat13Deadline)}</b></td>
-                        <td style="text-align:center;">${chkElem}</td>
-                        <td>${i.reason || ''}</td>
-                    </tr>
-                `;
-            }).join('');
+            // 수리 TAT 진척관리 체크박스 (조회 전용 - disabled)
+            document.getElementById('tatTableBody').innerHTML = filteredList.map(i => `
+                <tr>
+                    <td><b>${i.wq}</b></td>
+                    <td>${i.customer}</td>
+                    <td><b style="color:var(--purple);">${i.techCategory}</b></td>
+                    <td>${i.productCategory}</td>
+                    <td><b>${i.sn}</b></td>
+                    <td>${i.centerTat || i.overCategory || '-'}</td>
+                    <td>${i.status}</td>
+                    <td><b>${cleanVal(i.kddiUqMust || i.carrierDeadline)}</b></td>
+                    <td><b>${cleanVal(i.centerMust || i.tat13Deadline)}</b></td>
+                    <td style="text-align:center;"><input type="checkbox" disabled ${i.periodReturnCan ? 'checked' : ''}></td>
+                    <td>${i.reason || ''}</td>
+                </tr>
+            `).join('');
         }
 
         function resetTatFilters() {
@@ -742,8 +709,8 @@
                 "修理センターの未修理品の全体状況です。", "Customer", "Technical Category", "Product Category(S)", "SEC S/N",
                 "Defect Type", "KDDI,UQ\nTAT(수정)", "KDDI,UQ\nMUST 수리", "REQ] RECEIVE Date", "REQ] REPAIR IN Date",
                 "RET] REPAIRED OUT Date", "修理センター\nTAT(수정)", "修理センター\nMUST 수리", "Status", "Reproduce Detail",
-                "Fault Location", "대책2", " システム担当者", "DU/RU区分\n DU/RU区分", "PBA 名\u3000\nPBA名",
-                "PBA制限日\nPBA受領日", "PBA다시 결産日\nPBA再受領日", "수리가능여部\n修理可否\u3000(O, X)", "수리위치\n修理箇所", "함体出荷状況\n修理出荷状況",
+                "Fault Location", "대책2", " システム担当者", "DU/RU 구분\n DU/RU区分", "PBA 名\u3000\nPBA名",
+                "PBA 받은날짜\nPBA受領日", "PBA다시 결産日\nPBA再受領日", "수리가능여部\n修理可否\u3000(O, X)", "수리위치\n修理箇所", "함体出荷状況\n修理出荷状況",
                 "備考", "PBA_IN", "PBA_OUT", "PBA_OPENorCLOSE", "フラグ\n★：修理不可他\n□：代替品出荷\n※：reparied out\n●：TAT31日超過分に印\nDOCOMOは16日超過分に印\n",
                 "代替品\nアラーム", "代替品\n検討打診日", "集計用"
             ];
@@ -838,6 +805,20 @@
             hideProgressOverlay();
         }
 
+        async function loadLedgerDataSilent() {
+            const [ledgerRes, inqRes] = await Promise.all([
+                fetch(`${API_BASE}/api/ledger-data?sheet_name=${currentLedgerSheet}&mode=${currentLedgerSubView}`),
+                fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`)
+            ]);
+            const newLedger = await ledgerRes.json();
+            cachedInquiryData = await inqRes.json();
+
+            cachedLedgerData = newLedger;
+            if (document.getElementById('moduleLedger').classList.contains('active')) {
+                renderLedgerTableUI(cachedLedgerData);
+            }
+        }
+
         function renderLedgerTableUI(data) {
             const isDocomo = (currentLedgerSheet === 'docomo');
             const isUqRrh = (currentLedgerSheet === 'UQ RRH');
@@ -896,7 +877,7 @@
                 let row = `<tr><td style="text-align:center;"><b>${item.no}</b></td><td style="text-align:center;">${qaBtn}</td><td style="text-align:center;">${stSel}</td>`;
                 if (isUqRrh) {
                     row += `<td style="text-align:center;"><input type="text" ${roAttr} value="${rawVal(item.cartNo)}" oninput="updateLedgerCellInstant('${item.rowIdx}', 'cartNo', this.value)"></td>`;
-                    row += `<td style="text-align:center;"><input type="checkbox" class="custom-chk" ${disAttr} ${item.chkLabel?'checked':''} onchange="updateLedgerCell('${item.rowIdx}', 'chkLabel', this.checked)"></td>`;
+                    row += `<td style="text-align:center;"><input type="checkbox" ${disAttr} ${item.chkLabel?'checked':''} onchange="updateLedgerCell('${item.rowIdx}', 'chkLabel', this.checked)"></td>`;
                 }
                 row += `<td><b>${rawVal(item.snLarge)}</b></td><td>${rawVal(item.snSmall)}</td>`;
                 if (isUqRrh) row += `<td><input type="text" ${roAttr} value="${rawVal(item.internalInfo)}" oninput="updateLedgerCellInstant('${item.rowIdx}', 'internalInfo', this.value)"></td>`;
@@ -904,7 +885,7 @@
 
                 if (isDocomo) {
                     ['chkInboundLog', 'chkFmHisLog', 'chkCal', 'chkCharacteristic', 'chkNtfLog', 'chkOutboundLog', 'chkLock'].forEach(f => {
-                        row += `<td style="text-align:center;"><input type="checkbox" class="custom-chk" ${disAttr} ${item[f]?'checked':''} onchange="updateLedgerCell('${item.rowIdx}', '${f}', this.checked)"></td>`;
+                        row += `<td style="text-align:center;"><input type="checkbox" ${disAttr} ${item[f]?'checked':''} onchange="updateLedgerCell('${item.rowIdx}', '${f}', this.checked)"></td>`;
                     });
                 }
 
@@ -920,8 +901,8 @@
                 row += `<td style="text-align:center;">${mgrSel}</td><td><b>${rawVal(item.requestNo)}</b></td><td style="text-align:center;">${rawVal(item.customer)}</td><td style="text-align:center;">${rawVal(item.techCategory)}</td><td>${rawVal(item.modelCode)}</td><td>${rawVal(item.partCode)}</td><td>${rawVal(item.partDesc)}</td><td>${rawVal(item.symptom)}</td>`;
                 row += `<td style="text-align:center;">${rawVal(item.reDefect)||'N'}</td><td style="text-align:center;">${rawVal(item.noOfRequest)||'1'}</td><td style="text-align:center;">${rawVal(item.differenceDay)||'-'}</td><td style="text-align:center;"><b>${cleanVal(item.receivedDate)}</b></td>`;
                 
-                // 期間内返却可否 체크박스
-                row += `<td style="text-align:center;"><input type="checkbox" class="custom-chk" ${disAttr} ${item.periodReturnCan ? 'checked' : ''} onchange="updateLedgerCell('${item.rowIdx}', 'periodReturnCan', this.checked)"></td>`;
+                // 期間内返却可否 체크박스 (Teramoto 일반 계정만 체크 가능)
+                row += `<td style="text-align:center;"><input type="checkbox" ${disAttr} ${item.periodReturnCan ? 'checked' : ''} onchange="updateLedgerCell('${item.rowIdx}', 'periodReturnCan', this.checked)"></td>`;
                 
                 row += `<td><textarea style="${textareaStyle}" ${roAttr} placeholder="手動入力" oninput="updateLedgerCellInstant('${item.rowIdx}', 'delayReason', this.value)">${rawVal(item.delayReason)}</textarea></td></tr>`;
                 return row;
@@ -940,26 +921,11 @@
             }, 300);
         }
 
-        // 대장 셀 수정 및 TAT 데이터 즉시 동기화
-        async function updateLedgerCell(rowIdx, fieldName, fieldValue) {
+async function updateLedgerCell(rowIdx, fieldName, fieldValue) {
             lastInteractionTime = Date.now();
             let target = cachedLedgerData.find(d => d.rowIdx == rowIdx);
             if (target) {
                 target[fieldName] = fieldValue;
-                
-                // 期間内返却可否(periodReturnCan) 변경 시
-                if (fieldName === 'periodReturnCan') {
-                    let reqNo = target.requestNo;
-                    // 프론트엔드 TAT 메모리 데이터 즉시 동기화
-                    let tatTarget = cachedTatRawList.find(t => t.wq === reqNo);
-                    if (tatTarget) {
-                        tatTarget.periodReturnCan = fieldValue;
-                    }
-                    // TAT 모듈 화면 활성화 시 UI 즉시 리렌더링
-                    if (document.getElementById('moduleTat').classList.contains('active')) {
-                        applyTatFilters();
-                    }
-                }
             }
 
             if (fieldName === 'status') {
@@ -969,7 +935,7 @@
                 });
                 await loadLedgerData();
             } else {
-                fetch(`${API_BASE}/api/update-ledger-cell-field`, {
+                await fetch(`${API_BASE}/api/update-ledger-cell-field`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ sheetName: currentLedgerSheet, rowIdx, fieldName, fieldValue })
                 });
@@ -1118,11 +1084,10 @@
 
             closeQaModal();
 
-            const res = await fetch(`${API_BASE}/api/submit-inquiry`, {
+            await fetch(`${API_BASE}/api/submit-inquiry`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(qaData)
             });
-            const data = await res.json();
             alert("問い合わせ送信完了!");
             loadInquiryData();
             loadLedgerData();
@@ -1161,6 +1126,18 @@
 
             filterAndRenderInquiryTable();
             hideProgressOverlay();
+        }
+
+        async function loadInquiryDataSilent() {
+            const res = await fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`);
+            const data = await res.json();
+            if (JSON.stringify(cachedInquiryData) !== JSON.stringify(data)) {
+                cachedInquiryData = data;
+                filterAndRenderInquiryTable();
+                if (document.getElementById('moduleLedger').classList.contains('active')) {
+                    renderLedgerTableUI(cachedLedgerData);
+                }
+            }
         }
 
         function switchInquiryTab(mode, btn) {

@@ -65,7 +65,6 @@ def calculate_13_working_days_deadline(repair_in_str: str) -> str:
 @router.get("/tat-data")
 async def get_tat_data():
     try:
-        # 압축파일 원본 그대로: Pagination 루프 기반 전량 조회 (14,969건 정상 출력)
         all_data = []
         step = 1000
         start = 0
@@ -84,8 +83,9 @@ async def get_tat_data():
             carrier_dl = r.get("kddi_uq_must") or calculate_carrier_deadline(repair_in, cust)
             tat13_dl = r.get("center_must") or calculate_13_working_days_deadline(repair_in)
             
-            p_can = r.get("period_return_can")
-            is_checked = True if p_can in [True, "true", "True", 1, "1", "OK", "ok"] else False
+            # 기존 컬럼 repair_can 또는 period_return_can 파싱
+            rep_can = str(r.get("repair_can") or r.get("period_return_can") or '').strip().upper()
+            is_checked = rep_can in ["OK", "O", "TRUE", "1", "YES"]
 
             result.append({
                 "rowIdx": r["id"],
@@ -152,8 +152,8 @@ async def upload_excel(file: UploadFile = File(...)):
             sn_val = safe_cell(row, 4)
             repair_in = clean_date_str(safe_cell(row, 9)) or clean_date_str(safe_cell(row, 8))
             
-            can_return_raw = safe_cell(row, 22).upper()
-            can_return_bool = can_return_raw in ["OK", "O", "TRUE", "1", "YES"]
+            # W열 (Col 22: 수리가능여부) -> repair_can 저장
+            can_return_raw = safe_cell(row, 22).strip()
 
             records.append({
                 "wq": wq_val,
@@ -178,9 +178,9 @@ async def upload_excel(file: UploadFile = File(...)):
                 "pba_name": safe_cell(row, 19),
                 "pba_recv_date": clean_date_str(safe_cell(row, 20)),
                 "pba_re_recv_date": clean_date_str(safe_cell(row, 21)),
-                "period_return_can": can_return_bool,
+                "repair_can": can_return_raw,  # 기존 컬럼 활용
                 "repair_pos": safe_cell(row, 23),
-                "shipStatus": safe_cell(row, 24),
+                "ship_status": safe_cell(row, 24),
                 "remark": safe_cell(row, 25),
                 "pba_in": clean_date_str(safe_cell(row, 26)),
                 "pba_out": clean_date_str(safe_cell(row, 27)),
@@ -197,3 +197,28 @@ async def upload_excel(file: UploadFile = File(...)):
         return {"inserted": len(records), "ignored": 0, "success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"TAT 엑셀 파일 해석/DB 저장 오류: {str(e)}")
+
+class TatReturnUpdate(BaseModel):
+    rowIdx: int
+    isChecked: bool
+
+@router.post("/update-tat-period-return")
+async def update_tat_period_return(req: TatReturnUpdate):
+    try:
+        repair_can_str = "OK" if req.isChecked else ""
+        supabase.table("tat_data").update({"repair_can": repair_can_str}).eq("id", req.rowIdx).execute()
+
+        res = supabase.table("tat_data").select("sn, wq").eq("id", req.rowIdx).execute()
+        if res.data:
+            sn_val = str(res.data[0].get("sn") or '').strip()
+            wq_val = str(res.data[0].get("wq") or '').strip()
+            
+            if sn_val:
+                supabase.table("ledger_data").update({"period_return_can": req.isChecked}).eq("sn_large", sn_val).execute()
+                supabase.table("ledger_data").update({"period_return_can": req.isChecked}).eq("sn_small", sn_val).execute()
+            if wq_val:
+                supabase.table("ledger_data").update({"period_return_can": req.isChecked}).eq("request_no", wq_val).execute()
+
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
