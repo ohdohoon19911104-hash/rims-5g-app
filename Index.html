@@ -29,14 +29,33 @@
         .error-msg { color: var(--danger); font-size: 12px; margin-top: 10px; text-align: center; display: none; }
 
         .app-container { display: flex; width: 100vw; height: 100vh; overflow: hidden; position: relative; }
+        
         .sidebar { display: none; position: fixed; top: 0; left: 0; width: 64px; height: 100vh; background-color: var(--sidebar-bg); z-index: 1000; flex-direction: column; align-items: center; padding-top: 16px; border-right: 1px solid rgba(255,255,255,0.1); }
         .sidebar.active { display: flex; }
-        .sidebar-brand { color: #fff; font-size: 20px; margin-bottom: 20px; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-        .sidebar-brand:hover svg { fill: #ffffff; }
+        .sidebar-brand { color: #fff; font-size: 20px; margin-bottom: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; width: 100%; }
         
+        .sidebar-menu { width: 100%; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+        .nav-item { position: relative; width: 100%; display: flex; justify-content: center; }
+        .nav-btn { width: 44px; height: 44px; border-radius: 8px; border: none; background: transparent; color: #94a3b8; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+        .nav-btn:hover, .nav-item:hover .nav-btn { background-color: var(--primary); color: #ffffff; }
+        .nav-btn svg { width: 22px; height: 22px; fill: currentColor; }
+
+        .sub-panel { display: none; position: absolute; top: 0; left: 64px; width: 220px; background-color: var(--sidebar-panel); border-radius: 0 8px 8px 0; box-shadow: 4px 0 16px rgba(0,0,0,0.25); padding: 14px 0; z-index: 1001; }
+        .nav-item:hover .sub-panel { display: block; animation: slideRight 0.15s ease-out; }
+
+        @keyframes slideRight {
+            from { opacity: 0; transform: translateX(-10px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .panel-header { padding: 0 16px 10px 16px; font-size: 13px; font-weight: 800; color: #e2e8f0; border-bottom: 1px solid rgba(255,255,255,0.1); margin-bottom: 6px; }
+        .sub-menu { list-style: none; }
+        .sub-menu li { padding: 9px 16px; color: #cbd5e1; font-size: 12px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: space-between; transition: background 0.2s; }
+        .sub-menu li:hover { background-color: rgba(255,255,255,0.08); color: #ffffff; }
+
         .main-content { flex: 1; padding: 20px; height: 100vh; overflow-y: auto; overflow-x: hidden; margin-left: 0; transition: margin-left 0.2s; }
         .main-content.has-sidebar { margin-left: 64px; }
-        
+
         .portal-wrapper { max-width: 1200px; margin: 0 auto; }
         .portal-banner { background: #0f2744; border-radius: 12px; padding: 36px; color: #fff; margin-bottom: 28px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         .portal-title h2 { font-size: 11px; text-transform: uppercase; color: #60a5fa; letter-spacing: 1px; margin-bottom: 6px; }
@@ -61,10 +80,6 @@
         .tab-btn { padding: 8px 16px; border: none; background: transparent; font-size: 13px; font-weight: 800; color: var(--text-sub); cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px; }
         .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); background: #ffffff; border-radius: 6px 6px 0 0; }
 
-        .ledger-sub-toggle { display: flex; gap: 4px; margin-bottom: 12px; background: #e2e8f0; padding: 3px; border-radius: 6px; width: fit-content; }
-        .ledger-sub-btn { padding: 5px 12px; font-size: 11px; font-weight: 700; border: none; border-radius: 4px; background: transparent; color: #475569; cursor: pointer; transition: all 0.2s; }
-        .ledger-sub-btn.active { background: #ffffff; color: var(--primary); shadow: 0 1px 2px rgba(0,0,0,0.1); }
-
         .right-table-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; overflow-x: auto; overflow-y: visible; min-height: 500px; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
         
         table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; background: white; table-layout: auto; }
@@ -72,9 +87,10 @@
         th { background-color: #f8fafc; color: var(--text-sub); font-weight: 800; position: sticky; top: 0; z-index: 2; }
         tr:hover { background-color: #f1f5f9; }
 
-        select:disabled {
-            opacity: 1 !important;
-            -webkit-text-fill-color: inherit !important;
+        select:disabled, input:disabled { opacity: 1 !important; -webkit-text-fill-color: inherit !important; }
+
+        input[type="checkbox"].custom-chk {
+            width: 16px; height: 16px; cursor: pointer; accent-color: #1d4ed8;
         }
 
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.5); justify-content: center; align-items: center; z-index: 5000; padding: 20px; }
@@ -108,20 +124,51 @@
     </div>
 
     <div id="viewDashboard" class="app-container" style="display:none;">
-        <!-- 사이드바 (포털/홈 화면에서는 숨김 처리됨) -->
         <aside id="mainSidebar" class="sidebar">
-            <div class="sidebar-brand" title="ホーム" onclick="switchSystemModule('home')">
+            <div class="sidebar-brand" id="brandHomeBtn" title="ホーム" onclick="switchSystemModule('home')">
                 <svg viewBox="0 0 24 24" width="24" height="24" fill="#ffffff"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
             </div>
-            <div class="sidebar-brand" title="TAT進捗" onclick="switchSystemModule('tat')">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="#94a3b8"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
-            </div>
-            <div class="sidebar-brand" title="管理台帳" onclick="switchSystemModule('ledger')">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="#94a3b8"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
-            </div>
-            <div class="sidebar-brand" title="問い合わせ" onclick="switchSystemModule('inquiry')">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="#94a3b8"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"/></svg>
-            </div>
+            
+            <ul class="sidebar-menu">
+                <li class="nav-item" id="navTatItem">
+                    <button class="nav-btn" title="修理 TAT進捗管理">
+                        <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
+                    </button>
+                    <div class="sub-panel">
+                        <div class="panel-header">修理 TAT進捗管理</div>
+                        <ul class="sub-menu">
+                            <li onclick="switchSystemModule('tat')">1. 全進捗管理 一覧 <span>›</span></li>
+                            <li onclick="document.getElementById('fileInput').click()">2. 簡易版日報 登録 <span>›</span></li>
+                            <li onclick="exportFullSpreadsheetToExcel()">3. Excel出力 (.xlsx) <span>›</span></li>
+                            <li onclick="loadTatData()">4. 保存データ読み込み <span>›</span></li>
+                        </ul>
+                    </div>
+                </li>
+
+                <li class="nav-item" id="navLedgerItem">
+                    <button class="nav-btn" title="管理台帳">
+                        <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+                    </button>
+                    <div class="sub-panel">
+                        <div class="panel-header">管理台帳管理</div>
+                        <ul class="sub-menu" id="ledgerSubMenuContent">
+                        </ul>
+                    </div>
+                </li>
+
+                <li class="nav-item" id="navInquiryItem">
+                    <button class="nav-btn" title="問い合わせ">
+                        <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"/></svg>
+                    </button>
+                    <div class="sub-panel">
+                        <div class="panel-header">問い合わせ管理</div>
+                        <ul class="sub-menu">
+                            <li onclick="switchSystemModule('inquiry')">1. 問い合わせ ダッシュボード <span>›</span></li>
+                        </ul>
+                    </div>
+                </li>
+            </ul>
+
             <div class="sidebar-brand" title="ログアウト" onclick="handleLogout()" style="margin-top:auto; margin-bottom:20px;">
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="#94a3b8"><path d="M10.09 15.59L11.5 17l5-5-4.5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5c-1.11 0-2 .9-2 2v4h2V5h14v14H5v-4H3v4c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
             </div>
@@ -149,13 +196,8 @@
             </div>
 
             <div id="moduleTat" class="system-section">
-                <header style="display:flex; justify-content:space-between; margin-bottom:16px;">
+                <header style="margin-bottom:16px;">
                     <h1>修理センター TAT進捗管理システム</h1>
-                    <div>
-                        <button class="btn btn-success" onclick="exportFullSpreadsheetToExcel()">全スプレッドシート Excel出力 (.xlsx)</button>
-                        <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">簡易版日報 登録 (.xlsx)</button>
-                        <button class="btn btn-fetch" onclick="loadTatData()">保存データ読み込み</button>
-                    </div>
                 </header>
 
                 <div class="filter-bar">
@@ -200,22 +242,10 @@
             </div>
 
             <div id="moduleLedger" class="system-section">
-                <header style="display:flex; justify-content:space-between; margin-bottom:12px; align-items:flex-start;">
-                    <div>
-                        <h1 id="ledgerModuleTitle" style="font-size:22px; font-weight:800;">入庫管理台帳 システム (進行中)</h1>
-                        <p style="color:var(--text-sub); font-size:12px; margin-top:2px;">自動シート振り分け・重複スキップ・TAT自動算出・docomo項目対応</p>
-                    </div>
-                    <div>
-                        <button class="btn btn-primary" onclick="triggerLedgerFileUpload()">確定版 RMA List 取り込み (.xlsx)</button>
-                        <button class="btn btn-fetch" onclick="loadLedgerData()">台帳データ読み込み</button>
-                    </div>
+                <header style="margin-bottom:12px;">
+                    <h1 id="ledgerModuleTitle" style="font-size:22px; font-weight:800;">入庫管理台帳 システム (進行中)</h1>
+                    <p style="color:var(--text-sub); font-size:12px; margin-top:2px;">自動シート振り分け・重複スキップ・TAT自動算出・docomo項目対応</p>
                 </header>
-
-                <!-- 관리대장 진행중 / 출고완료 서브 탭 토글 -->
-                <div class="ledger-sub-toggle">
-                    <button id="subBtnInProgress" class="ledger-sub-btn active" onclick="switchLedgerSubView('in_progress')">• 入庫管理 (進行中)</button>
-                    <button id="subBtnCompleted" class="ledger-sub-btn" onclick="switchLedgerSubView('completed')">• 出荷完了台帳 (完了分)</button>
-                </div>
 
                 <div class="tabs">
                     <button class="tab-btn ledger-tab-btn active" onclick="switchLedgerSheet('BBU', this)">BBU</button>
@@ -369,7 +399,7 @@
         const API_BASE = window.location.origin;
         let currentUserSession = null;
         let currentLedgerSheet = 'BBU';
-        let currentLedgerSubView = 'in_progress'; // 'in_progress' or 'completed'
+        let currentLedgerSubView = 'in_progress';
         let cachedLedgerData = [];
         let cachedTatRawList = [];
         let cachedInquiryData = null;
@@ -445,16 +475,53 @@
                 document.getElementById('viewLogin').style.display = 'none';
                 document.getElementById('viewDashboard').style.display = 'flex';
 
-                const cardInquiry = document.getElementById('portalCardInquiry');
-                if (cardInquiry) {
-                    cardInquiry.style.display = (currentUserSession.role === 'TERAMOTO_STAFF') ? 'none' : 'block';
-                }
+                setupUIByPermission();
 
                 switchSystemModule(currentUserSession.role === 'TERAMOTO_STAFF' ? 'ledger' : 'home');
                 startAutoPolling();
             } else {
                 document.getElementById('errorMsg').innerText = data.message;
                 document.getElementById('errorMsg').style.display = 'block';
+            }
+        }
+
+        function setupUIByPermission() {
+            if (!currentUserSession) return;
+
+            const isTeramotoStaff = (currentUserSession.role === 'TERAMOTO_STAFF');
+
+            const brandHomeBtn = document.getElementById('brandHomeBtn');
+            const navTat = document.getElementById('navTatItem');
+            const navInq = document.getElementById('navInquiryItem');
+            const cardInquiry = document.getElementById('portalCardInquiry');
+            const ledgerSubMenuContent = document.getElementById('ledgerSubMenuContent');
+
+            if (isTeramotoStaff) {
+                if (brandHomeBtn) brandHomeBtn.style.display = 'none';
+                if (navTat) navTat.style.display = 'none';
+                if (navInq) navInq.style.display = 'none';
+                if (cardInquiry) cardInquiry.style.display = 'none';
+
+                if (ledgerSubMenuContent) {
+                    ledgerSubMenuContent.innerHTML = `
+                        <li onclick="switchLedgerSubView('in_progress')">1. 入庫管理台帳 (進行中) <span>›</span></li>
+                        <li onclick="switchLedgerSubView('completed')">2. 出荷完了台帳 (完了分) <span>›</span></li>
+                    `;
+                }
+            } else {
+                if (brandHomeBtn) brandHomeBtn.style.display = 'flex';
+                if (navTat) navTat.style.display = 'flex';
+                if (navInq) navInq.style.display = 'flex';
+                if (cardInquiry) cardInquiry.style.display = 'block';
+
+                if (ledgerSubMenuContent) {
+                    ledgerSubMenuContent.innerHTML = `
+                        <li onclick="switchLedgerSubView('in_progress')">1. 入庫管理台帳 (進行中) <span>›</span></li>
+                        <li onclick="switchLedgerSubView('completed')">2. 出荷完了台帳 (完了分) <span>›</span></li>
+                        <li onclick="triggerLedgerFileUpload()">3. 確定版取り込み <span>›</span></li>
+                        <li onclick="loadLedgerData()">4. 台帳データ 読み込み <span>›</span></li>
+                    `;
+                }
             }
         }
 
@@ -465,23 +532,23 @@
             document.getElementById('viewDashboard').style.display = 'none';
         }
 
+        /* 1초 간격 백그라운드 무音 자동 동기화 (TAT 수信) */
         function startAutoPolling() {
             if (autoPollingInterval) clearInterval(autoPollingInterval);
-            let pollingTime = 3000;
+            let pollingTime = 1000;
 
             autoPollingInterval = setInterval(() => {
                 if (!currentUserSession) return;
                 let activeEl = document.activeElement;
                 let isUserTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT');
-                let isRecentlyClicked = (Date.now() - lastInteractionTime < 2000);
 
-                if (isUserTyping || isRecentlyClicked) return;
+                if (isUserTyping) return;
 
-                loadInquiryDataSilent();
-                loadLedgerDataSilent();
+                loadTatDataSilent();
             }, pollingTime);
         }
 
+        // 모듈 전환 시 로ディング 딜레이 없이 즉시 화면 전환
         function switchSystemModule(moduleName) {
             if (currentUserSession && currentUserSession.role === 'TERAMOTO_STAFF' && moduleName !== 'ledger') {
                 moduleName = 'ledger';
@@ -490,7 +557,6 @@
             const sidebar = document.getElementById('mainSidebar');
             const mainContent = document.getElementById('mainContent');
 
-            // 포털 화면(home)일 때는 사이드바 숨김
             if (moduleName === 'home') {
                 sidebar.classList.remove('active');
                 mainContent.classList.remove('has-sidebar');
@@ -500,10 +566,38 @@
             }
 
             document.querySelectorAll('.system-section').forEach(el => el.classList.remove('active'));
-            if (moduleName === 'home') document.getElementById('moduleHome').classList.add('active');
-            else if (moduleName === 'tat') { document.getElementById('moduleTat').classList.add('active'); loadTatData(); }
-            else if (moduleName === 'ledger') { document.getElementById('moduleLedger').classList.add('active'); loadLedgerData(); }
-            else if (moduleName === 'inquiry') { document.getElementById('moduleInquiry').classList.add('active'); loadInquiryData(); }
+            
+            if (moduleName === 'home') {
+                document.getElementById('moduleHome').classList.add('active');
+            } else if (moduleName === 'tat') { 
+                document.getElementById('moduleTat').classList.add('active'); 
+                // 로딩 레이어 없이 메모리 데이터로 화면 즉시 UI 렌더링
+                applyTatFilters();
+                // 백그라운드 최신 데이터 수신
+                loadTatDataSilent();
+            } else if (moduleName === 'ledger') { 
+                document.getElementById('moduleLedger').classList.add('active'); 
+                loadLedgerData(); 
+            } else if (moduleName === 'inquiry') { 
+                document.getElementById('moduleInquiry').classList.add('active'); 
+                loadInquiryData(); 
+            }
+        }
+
+        function switchLedgerSubView(mode) {
+            currentLedgerSubView = mode;
+            switchSystemModule('ledger');
+
+            const titleEl = document.getElementById('ledgerModuleTitle');
+            const subTitleEl = document.getElementById('ledgerSubTitle');
+            if (mode === 'in_progress') {
+                titleEl.innerText = "入庫管理台帳 システム (進行中)";
+                subTitleEl.innerText = "入庫管理台帳 一覧 (進行中)";
+            } else {
+                titleEl.innerText = "出荷完了台帳 システム (完了分)";
+                subTitleEl.innerText = "出荷完了台帳 一覧 (完了分)";
+            }
+            loadLedgerData();
         }
 
         async function loadTatData() {
@@ -513,6 +607,17 @@
             populateTatFilterOptions(cachedTatRawList);
             applyTatFilters();
             hideProgressOverlay();
+        }
+
+        async function loadTatDataSilent() {
+            const res = await fetch(`${API_BASE}/api/tat-data`);
+            const newData = await res.json();
+            if (JSON.stringify(cachedTatRawList) !== JSON.stringify(newData)) {
+                cachedTatRawList = newData;
+                if (document.getElementById('moduleTat').classList.contains('active')) {
+                    applyTatFilters();
+                }
+            }
         }
 
         function populateTatFilterOptions(rawList) {
@@ -595,21 +700,29 @@
             });
 
             document.getElementById('kpiTotal').innerText = filteredList.length.toLocaleString() + "件";
-            document.getElementById('tatTableBody').innerHTML = filteredList.map(i => `
-                <tr>
-                    <td><b>${i.wq}</b></td>
-                    <td>${i.customer}</td>
-                    <td><b style="color:var(--purple);">${i.techCategory}</b></td>
-                    <td>${i.productCategory}</td>
-                    <td><b>${i.sn}</b></td>
-                    <td>${i.centerTat || i.overCategory || '-'}</td>
-                    <td>${i.status}</td>
-                    <td><b>${cleanVal(i.kddiUqMust || i.carrierDeadline)}</b></td>
-                    <td><b>${cleanVal(i.centerMust || i.tat13Deadline)}</b></td>
-                    <td style="text-align:center;"><input type="checkbox" ${i.periodReturnCan ? 'checked' : ''} onchange="onTatPeriodReturnChange(${i.rowIdx}, this.checked)"></td>
-                    <td>${i.reason || ''}</td>
-                </tr>
-            `).join('');
+            
+            document.getElementById('tatTableBody').innerHTML = filteredList.map(i => {
+                let isChecked = i.periodReturnCan;
+                let chkElem = isChecked ? 
+                    `<span class="badge badge-primary" style="background:#1d4ed8; color:#ffffff; padding:4px 8px; border-radius:4px; font-weight:800;">✔ OK</span>` : 
+                    `<input type="checkbox" class="custom-chk" disabled>`;
+
+                return `
+                    <tr>
+                        <td><b>${i.wq}</b></td>
+                        <td>${i.customer}</td>
+                        <td><b style="color:var(--purple);">${i.techCategory}</b></td>
+                        <td>${i.productCategory}</td>
+                        <td><b>${i.sn}</b></td>
+                        <td>${i.centerTat || i.overCategory || '-'}</td>
+                        <td>${i.status}</td>
+                        <td><b>${cleanVal(i.kddiUqMust || i.carrierDeadline)}</b></td>
+                        <td><b>${cleanVal(i.centerMust || i.tat13Deadline)}</b></td>
+                        <td style="text-align:center;">${chkElem}</td>
+                        <td>${i.reason || ''}</td>
+                    </tr>
+                `;
+            }).join('');
         }
 
         function resetTatFilters() {
@@ -629,14 +742,16 @@
                 "修理センターの未修理品の全体状況です。", "Customer", "Technical Category", "Product Category(S)", "SEC S/N",
                 "Defect Type", "KDDI,UQ\nTAT(수정)", "KDDI,UQ\nMUST 수리", "REQ] RECEIVE Date", "REQ] REPAIR IN Date",
                 "RET] REPAIRED OUT Date", "修理センター\nTAT(수정)", "修理センター\nMUST 수리", "Status", "Reproduce Detail",
-                "Fault Location", "대책2", " システム担当者", "DU/RU 구분\n DU/RU区分", "PBA 名\u3000\nPBA名",
-                "PBA 받은날짜\nPBA受領日", "PBA다시 결産日\nPBA再受領日", "수리가능여部\n修理可否\u3000(O, X)", "수리위치\n修理箇所", "함체출고여부\n修理出荷状況",
+                "Fault Location", "대책2", " システム担当者", "DU/RU区分\n DU/RU区分", "PBA 名\u3000\nPBA名",
+                "PBA制限日\nPBA受領日", "PBA다시 결産日\nPBA再受領日", "수리가능여部\n修理可否\u3000(O, X)", "수리위치\n修理箇所", "함体出荷状況\n修理出荷状況",
                 "備考", "PBA_IN", "PBA_OUT", "PBA_OPENorCLOSE", "フラグ\n★：修理不可他\n□：代替品出荷\n※：reparied out\n●：TAT31日超過分に印\nDOCOMOは16日超過分に印\n",
                 "代替品\nアラーム", "代替品\n検討打診日", "集計用"
             ];
 
             let aoa = [headers];
             cachedTatRawList.forEach(i => {
+                let canReturnStr = i.periodReturnCan ? "OK" : "";
+
                 aoa.push([
                     i.wq || "", i.customer || "", i.techCategory || "", i.productCategory || "", i.sn || "",
                     i.defectType || "Function / Performance Defect", 
@@ -652,7 +767,9 @@
                     i.faultLocation || "",           
                     i.countermeasure2 || "",         
                     i.sysManager || "",              
-                    i.duRuType || "", i.pbaName || "", i.pbaRecvDate || "", i.pbaReRecvDate || "", i.repairCan || "", i.repairPos || "", i.shipStatus || "",
+                    i.duRuType || "", i.pbaName || "", i.pbaRecvDate || "", i.pbaReRecvDate || "", 
+                    canReturnStr,
+                    i.repairPos || "", i.shipStatus || "",
                     i.remark || "",                  
                     i.pbaIn || "", i.pbaOut || "", i.pbaOpenClose || "", 
                     i.flagMark || "",                
@@ -691,13 +808,6 @@
             alert("同期完了!"); loadTatData();
         }
 
-        async function onTatPeriodReturnChange(rowIdx, isChecked) {
-            await fetch(`${API_BASE}/api/update-tat-period-return`, {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ rowIdx, isChecked })
-            });
-        }
-
         function triggerLedgerFileUpload() { document.getElementById('ledgerFileInput').click(); }
 
         async function handleLedgerFile(file) {
@@ -706,23 +816,6 @@
             const formData = new FormData(); formData.append("file", file);
             await fetch(`${API_BASE}/api/upload-ledger-excel`, { method: "POST", body: formData });
             alert("台帳同期完了!"); loadLedgerData();
-        }
-
-        function switchLedgerSubView(mode) {
-            currentLedgerSubView = mode;
-            document.getElementById('subBtnInProgress').classList.toggle('active', mode === 'in_progress');
-            document.getElementById('subBtnCompleted').classList.toggle('active', mode === 'completed');
-            
-            const titleEl = document.getElementById('ledgerModuleTitle');
-            const subTitleEl = document.getElementById('ledgerSubTitle');
-            if (mode === 'in_progress') {
-                titleEl.innerText = "入庫管理台帳 システム (進行中)";
-                subTitleEl.innerText = "入庫管理台帳 一覧 (進行中)";
-            } else {
-                titleEl.innerText = "出荷完了台帳 システム (完了分)";
-                subTitleEl.innerText = "出荷完了台帳 一覧 (完了分)";
-            }
-            loadLedgerData();
         }
 
         function switchLedgerSheet(sheetName, btn) {
@@ -745,20 +838,6 @@
             hideProgressOverlay();
         }
 
-        async function loadLedgerDataSilent() {
-            const [ledgerRes, inqRes] = await Promise.all([
-                fetch(`${API_BASE}/api/ledger-data?sheet_name=${currentLedgerSheet}&mode=${currentLedgerSubView}`),
-                fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`)
-            ]);
-            const newLedger = await ledgerRes.json();
-            cachedInquiryData = await inqRes.json();
-
-            cachedLedgerData = newLedger;
-            if (document.getElementById('moduleLedger').classList.contains('active')) {
-                renderLedgerTableUI(cachedLedgerData);
-            }
-        }
-
         function renderLedgerTableUI(data) {
             const isDocomo = (currentLedgerSheet === 'docomo');
             const isUqRrh = (currentLedgerSheet === 'UQ RRH');
@@ -774,7 +853,7 @@
             if (isDocomo) headHtml += '<th>入庫ログ</th><th>FMHisログ</th><th>CAL</th><th>特性試験</th><th>NTFログ</th><th>出庫ログ</th><th>ロック</th>';
             if (isUqRrh) headHtml += '<th>再現試験結果1_1</th><th>再現試験結果1_2</th><th>再現試験結果2_1</th><th>再現試験結果2_2</th><th>資材コード</th><th>シリアル</th>';
             else headHtml += '<th style="min-width:180px;">再現試験結果</th>';
-            headHtml += '<th style="min-width:180px;">修理内容</th><th style="min-width:100px; text-align:center;">担当者</th><th style="min-width:150px;">Request No.</th><th style="min-width:80px; text-align:center;">Customer</th><th style="min-width:150px; text-align:center;">Technical Category</th><th style="min-width:120px;">Model Code</th><th style="min-width:120px;">Part Code</th><th style="min-width:220px;">Part Desc</th><th style="min-width:200px;">Symptom</th><th style="min-width:80px; text-align:center;">Re defect</th><th style="min-width:100px; text-align:center;">No of Request</th><th style="min-width:110px; text-align:center;">Difference Day</th><th style="min-width:110px; text-align:center;">Received Date</th><th style="min-width:180px;">遅延理由</th></tr>';
+            headHtml += '<th style="min-width:180px;">修理内容</th><th style="min-width:100px; text-align:center;">担当者</th><th style="min-width:150px;">Request No.</th><th style="min-width:80px; text-align:center;">Customer</th><th style="min-width:150px; text-align:center;">Technical Category</th><th style="min-width:120px;">Model Code</th><th style="min-width:120px;">Part Code</th><th style="min-width:220px;">Part Desc</th><th style="min-width:200px;">Symptom</th><th style="min-width:80px; text-align:center;">Re defect</th><th style="min-width:100px; text-align:center;">No of Request</th><th style="min-width:110px; text-align:center;">Difference Day</th><th style="min-width:110px; text-align:center;">Received Date</th><th style="min-width:100px; text-align:center;">期間内返却可否</th><th style="min-width:180px;">遅延理由</th></tr>';
 
             document.getElementById('ledgerTableHead').innerHTML = headHtml;
 
@@ -782,7 +861,8 @@
             const textareaStyle = 'width:100%; min-width:160px; height:38px; padding:4px 6px; border:1px solid var(--border); border-radius:4px; font-size:11px; outline:none; resize:both;';
 
             if (!data || data.length === 0) {
-                document.getElementById('ledgerTableBody').innerHTML = `<tr><td colspan="30" style="text-align:center;">データがありません。</td></tr>`;
+                const subText = (currentLedgerSubView === 'completed') ? '出荷完了' : '進行中';
+                document.getElementById('ledgerTableBody').innerHTML = `<tr><td colspan="32" style="text-align:center;">[${currentLedgerSheet}] ${subText}データがありません。</td></tr>`;
                 return;
             }
 
@@ -816,7 +896,7 @@
                 let row = `<tr><td style="text-align:center;"><b>${item.no}</b></td><td style="text-align:center;">${qaBtn}</td><td style="text-align:center;">${stSel}</td>`;
                 if (isUqRrh) {
                     row += `<td style="text-align:center;"><input type="text" ${roAttr} value="${rawVal(item.cartNo)}" oninput="updateLedgerCellInstant('${item.rowIdx}', 'cartNo', this.value)"></td>`;
-                    row += `<td style="text-align:center;"><input type="checkbox" ${disAttr} ${item.chkLabel?'checked':''} onchange="updateLedgerCell('${item.rowIdx}', 'chkLabel', this.checked)"></td>`;
+                    row += `<td style="text-align:center;"><input type="checkbox" class="custom-chk" ${disAttr} ${item.chkLabel?'checked':''} onchange="updateLedgerCell('${item.rowIdx}', 'chkLabel', this.checked)"></td>`;
                 }
                 row += `<td><b>${rawVal(item.snLarge)}</b></td><td>${rawVal(item.snSmall)}</td>`;
                 if (isUqRrh) row += `<td><input type="text" ${roAttr} value="${rawVal(item.internalInfo)}" oninput="updateLedgerCellInstant('${item.rowIdx}', 'internalInfo', this.value)"></td>`;
@@ -824,7 +904,7 @@
 
                 if (isDocomo) {
                     ['chkInboundLog', 'chkFmHisLog', 'chkCal', 'chkCharacteristic', 'chkNtfLog', 'chkOutboundLog', 'chkLock'].forEach(f => {
-                        row += `<td style="text-align:center;"><input type="checkbox" ${disAttr} ${item[f]?'checked':''} onchange="updateLedgerCell('${item.rowIdx}', '${f}', this.checked)"></td>`;
+                        row += `<td style="text-align:center;"><input type="checkbox" class="custom-chk" ${disAttr} ${item[f]?'checked':''} onchange="updateLedgerCell('${item.rowIdx}', '${f}', this.checked)"></td>`;
                     });
                 }
 
@@ -839,6 +919,10 @@
                 row += `<td><textarea style="${textareaStyle}" ${roAttr} placeholder="手動入力" oninput="updateLedgerCellInstant('${item.rowIdx}', 'repairDetail', this.value)">${rawVal(item.repairDetail)}</textarea></td>`;
                 row += `<td style="text-align:center;">${mgrSel}</td><td><b>${rawVal(item.requestNo)}</b></td><td style="text-align:center;">${rawVal(item.customer)}</td><td style="text-align:center;">${rawVal(item.techCategory)}</td><td>${rawVal(item.modelCode)}</td><td>${rawVal(item.partCode)}</td><td>${rawVal(item.partDesc)}</td><td>${rawVal(item.symptom)}</td>`;
                 row += `<td style="text-align:center;">${rawVal(item.reDefect)||'N'}</td><td style="text-align:center;">${rawVal(item.noOfRequest)||'1'}</td><td style="text-align:center;">${rawVal(item.differenceDay)||'-'}</td><td style="text-align:center;"><b>${cleanVal(item.receivedDate)}</b></td>`;
+                
+                // 期間内返却可否 체크박스
+                row += `<td style="text-align:center;"><input type="checkbox" class="custom-chk" ${disAttr} ${item.periodReturnCan ? 'checked' : ''} onchange="updateLedgerCell('${item.rowIdx}', 'periodReturnCan', this.checked)"></td>`;
+                
                 row += `<td><textarea style="${textareaStyle}" ${roAttr} placeholder="手動入力" oninput="updateLedgerCellInstant('${item.rowIdx}', 'delayReason', this.value)">${rawVal(item.delayReason)}</textarea></td></tr>`;
                 return row;
             }).join('');
@@ -856,10 +940,26 @@
             }, 300);
         }
 
+        // 대장 셀 수정 및 TAT 데이터 즉시 동기화
         async function updateLedgerCell(rowIdx, fieldName, fieldValue) {
+            lastInteractionTime = Date.now();
             let target = cachedLedgerData.find(d => d.rowIdx == rowIdx);
             if (target) {
                 target[fieldName] = fieldValue;
+                
+                // 期間内返却可否(periodReturnCan) 변경 시
+                if (fieldName === 'periodReturnCan') {
+                    let reqNo = target.requestNo;
+                    // 프론트엔드 TAT 메모리 데이터 즉시 동기화
+                    let tatTarget = cachedTatRawList.find(t => t.wq === reqNo);
+                    if (tatTarget) {
+                        tatTarget.periodReturnCan = fieldValue;
+                    }
+                    // TAT 모듈 화면 활성화 시 UI 즉시 리렌더링
+                    if (document.getElementById('moduleTat').classList.contains('active')) {
+                        applyTatFilters();
+                    }
+                }
             }
 
             if (fieldName === 'status') {
@@ -867,8 +967,9 @@
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ sheetName: currentLedgerSheet, rowIdx, newStatus: fieldValue })
                 });
+                await loadLedgerData();
             } else {
-                await fetch(`${API_BASE}/api/update-ledger-cell-field`, {
+                fetch(`${API_BASE}/api/update-ledger-cell-field`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ sheetName: currentLedgerSheet, rowIdx, fieldName, fieldValue })
                 });
@@ -1017,10 +1118,11 @@
 
             closeQaModal();
 
-            await fetch(`${API_BASE}/api/submit-inquiry`, {
+            const res = await fetch(`${API_BASE}/api/submit-inquiry`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(qaData)
             });
+            const data = await res.json();
             alert("問い合わせ送信完了!");
             loadInquiryData();
             loadLedgerData();
@@ -1059,18 +1161,6 @@
 
             filterAndRenderInquiryTable();
             hideProgressOverlay();
-        }
-
-        async function loadInquiryDataSilent() {
-            const res = await fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`);
-            const data = await res.json();
-            if (JSON.stringify(cachedInquiryData) !== JSON.stringify(data)) {
-                cachedInquiryData = data;
-                filterAndRenderInquiryTable();
-                if (document.getElementById('moduleLedger').classList.contains('active')) {
-                    renderLedgerTableUI(cachedLedgerData);
-                }
-            }
         }
 
         function switchInquiryTab(mode, btn) {
