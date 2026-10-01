@@ -1,5 +1,9 @@
 import re
 import threading
+import asyncio
+import json
+from functools import lru_cache
+from fastapi.responses import StreamingResponse
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from typing import Any, List
@@ -8,6 +12,34 @@ from datetime import datetime, timedelta
 from database import supabase
 
 router = APIRouter(prefix="/api", tags=["Ledger Service"])
+
+_change_revision = 0
+_change_guard = threading.Lock()
+
+def notify_ledger_change():
+    global _change_revision
+    with _change_guard:
+        _change_revision += 1
+
+@router.get("/data-change-events")
+async def data_change_events():
+    async def events():
+        last = _change_revision
+        yield "event: ready\ndata: {}\n\n"
+        idle = 0
+        while True:
+            await asyncio.sleep(0.2)
+            revision = _change_revision
+            if revision != last:
+                last = revision
+                idle = 0
+                yield "event: changed\ndata: " + json.dumps({"revision": revision}) + "\n\n"
+            else:
+                idle += 1
+                if idle >= 75:
+                    idle = 0
+                    yield ": keepalive\n\n"
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control":"no-cache", "X-Accel-Buffering":"no"})
 
 JP_HOLIDAYS = [
     "2025-01-01", "2025-01-13", "2025-02-11", "2025-02-23", "2025-02-24", "2025-03-20",
@@ -35,11 +67,15 @@ def safe_cell(row: Any, idx: int, default: str = "") -> str:
     return default
 
 def calculate_working_days(start_date_str: str) -> int:
+    return _calculate_working_days_cached(start_date_str, datetime.now().strftime("%Y-%m-%d"))
+
+@lru_cache(maxsize=4096)
+def _calculate_working_days_cached(start_date_str: str, today: str) -> int:
     clean_s = clean_date_str(start_date_str)
     if not clean_s: return 0
     try:
         start = datetime.strptime(clean_s, "%Y-%m-%d")
-        end = datetime.now()
+        end = datetime.strptime(today, "%Y-%m-%d")
         if start > end: return 0
         count = 0
         cur = start
@@ -148,7 +184,7 @@ def _upsert_with_fallback(table_name: str, records: List[dict], conflict_col: st
         supabase.table(table_name).update(r).eq(conflict_col, r[conflict_col]).execute()
 
 @router.get("/ledger-data")
-def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is_outbound: bool = False, offset: int = 0, limit: int = 0):
+def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is_outbound: bool = False, offset: int = 0, limit: int = 0, known_total: int = -1):
     try:
         target_outbound = True if mode == "completed" or is_outbound else False
 
@@ -162,12 +198,12 @@ def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is_outbo
         # 조회 오류로 화면 전체가 깨지지 않도록 존재 여부를 확인 후 필터링한다
         live_cols = _probe_existing_columns("ledger_data", LEDGER_CORE_COLUMNS + LEDGER_EXTENDED_COLUMNS)
         while True:
-            q = supabase.table("ledger_data").select("*", count="exact" if limit else None).eq("sheet_name", sheet_name)
+            q = supabase.table("ledger_data").select("*", count="exact" if limit and known_total < 0 else None).eq("sheet_name", sheet_name)
             if "is_outbound" in live_cols:
                 q = q.eq("is_outbound", target_outbound)
             res = q.order("id", desc=False).range(start, start + step - 1).execute()
             if limit:
-                total = res.count
+                total = known_total if known_total >= 0 else res.count
             rows = res.data or []
             all_data.extend(rows)
             if limit or len(rows) < step:
@@ -296,6 +332,8 @@ def upload_ledger_excel(file: UploadFile = File(...)):
             filtered = _filter_records_by_live_columns(new_records, "ledger_data", LEDGER_CORE_COLUMNS, LEDGER_EXTENDED_COLUMNS)
             for batch in _chunked_list(filtered, 200):
                 supabase.table("ledger_data").insert(batch, returning="minimal").execute()
+        if new_records:
+            notify_ledger_change()
         return {"inserted": len(new_records), "ignored": ignored, "success": True}
     except HTTPException:
         raise
@@ -310,11 +348,12 @@ class LedgerStatusUpdate(BaseModel):
     newStatus: str
 
 @router.post("/update-ledger-status")
-async def update_ledger_status(req: LedgerStatusUpdate):
+def update_ledger_status(req: LedgerStatusUpdate):
     try:
         is_out = (req.newStatus == '出庫済み')
         status2 = 'CLOSE' if is_out else 'REQ] REPAIR IN'
         supabase.table("ledger_data").update({"status": req.newStatus, "status2": status2, "is_outbound": is_out}).eq("id", req.rowIdx).execute()
+        notify_ledger_change()
         return {"success": True}
     except Exception as e: return {"success": False, "message": str(e)}
 
@@ -325,7 +364,7 @@ class LedgerCellFieldUpdate(BaseModel):
     fieldValue: Any
 
 @router.post("/update-ledger-cell-field")
-async def update_ledger_cell_field(req: LedgerCellFieldUpdate):
+def update_ledger_cell_field(req: LedgerCellFieldUpdate):
     try:
         field_map = {
             "cartNo": "cart_no", "chkLabel": "chk_label", "internalInfo": "internal_info",
@@ -358,6 +397,7 @@ async def update_ledger_cell_field(req: LedgerCellFieldUpdate):
                     for serial in set(filter(None, (sn_l, sn_s))):
                         supabase.table("tat_data").update({"period_return_can": bool_val}).eq("wq", req_no).eq("sn", serial).execute()
 
+        notify_ledger_change()
         return {"success": True}
     except Exception as e:
         print(f"Update Field Error: {e}")

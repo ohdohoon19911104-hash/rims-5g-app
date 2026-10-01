@@ -440,26 +440,37 @@
             hideProgressOverlay();
         }
         async function fetchPagedRows(url, startPercent=0, endPercent=100) {
-            const rows = [];
-            let offset = 0;
-            while (true) {
-                const join = url.includes('?') ? '&' : '?';
-                const res = await fetch(`${url}${join}offset=${offset}&limit=500`, {cache:'no-store'});
+            const join = url.includes('?') ? '&' : '?';
+            const size = 1000;
+            const read = async (offset, total=-1) => {
+                const res = await fetch(`${url}${join}offset=${offset}&limit=${size}&known_total=${total}`, {cache:'no-store'});
                 let page;
                 try { page = await res.json(); }
                 catch (e) { throw new Error('サーバーの応答を解析できません: HTTP ' + res.status); }
                 if (!res.ok) throw new Error(page.detail || ('HTTP ' + res.status));
-                if (!page || !Array.isArray(page.rows) || !Number.isFinite(page.total)) {
-                    throw new Error('保存データの応答形式が不正です。Index.htmlとtat_service.pyを同じ版に更新してください。');
+                if (!page || !Array.isArray(page.rows) || !Number.isFinite(page.total)) throw new Error('保存データの応答形式が不正です。プログラムを同じ版に更新してください。');
+                return page;
+            };
+            const first = await read(0);
+            const total = first.total;
+            const pages = [first.rows];
+            let received = first.rows.length;
+            const update = () => setLoadProgress(startPercent + (endPercent-startPercent) * Math.min(received / Math.max(total,1), 0.999));
+            update();
+            for (let offset=size; offset<total; offset+=size*3) {
+                const group=[];
+                for(let index=0; index<3 && offset+index*size<total; index++) {
+                    const at=offset+index*size;
+                    group.push(read(at,total).then(page => {
+                        if(page.rows.length !== Math.min(size,total-at)) throw new Error('データ件数が読み込み中に変わりました。再読み込みしてください。');
+                        received += page.rows.length; update(); return page.rows;
+                    }));
                 }
-                rows.push(...page.rows);
-                offset += page.rows.length;
-                if (offset >= page.total) break;
-                if (!page.rows.length) throw new Error('読み込みが途中で停止しました');
-                setLoadProgress(startPercent + (endPercent-startPercent) * offset/page.total);
+                pages.push(...await Promise.all(group));
                 await new Promise(resolve => requestAnimationFrame(resolve));
             }
-            return rows;
+            if(received !== total) throw new Error('全件を取得できませんでした。再読み込みしてください。');
+            return pages.flat();
         }
 
         function rawVal(v) {
@@ -567,6 +578,7 @@
 
         function handleLogout() {
             if (autoPollingInterval) clearInterval(autoPollingInterval);
+            if (dataChangeStream) { dataChangeStream.close(); dataChangeStream=null; }
             currentUserSession = null;
             document.getElementById('viewLogin').style.display = 'flex';
             document.getElementById('viewDashboard').style.display = 'none';
@@ -591,8 +603,40 @@
             finally { tatStateBusy = false; }
         }
 
+        let dataChangeStream = null;
+        let ledgerRefreshBusy = false;
+        let deferredChange = false;
+        function ledgerEditorFocused() {
+            const el=document.activeElement;
+            return el && ['INPUT','TEXTAREA','SELECT'].includes(el.tagName) && el.closest('#moduleLedger');
+        }
+        async function applyLiveDataChange() {
+            if (!currentUserSession || tatTransferBusy) { deferredChange=true; return; }
+            refreshTatReturnState();
+            if (document.getElementById('moduleLedger').classList.contains('active')) {
+                if (ledgerEditorFocused()) { deferredChange=true; return; }
+                if (ledgerRefreshBusy) { deferredChange=true; return; }
+                ledgerRefreshBusy=true;
+                try { await loadLedgerDataSilent(); }
+                catch (e) { console.error('台帳更新を取得できません',e); }
+                finally { ledgerRefreshBusy=false; }
+            }
+        }
+        function startChangeStream() {
+            if (dataChangeStream) dataChangeStream.close();
+            dataChangeStream=new EventSource(`${API_BASE}/api/data-change-events`);
+            dataChangeStream.addEventListener('changed', () => { applyLiveDataChange(); });
+            dataChangeStream.addEventListener('ready', () => { applyLiveDataChange(); });
+        }
+        document.addEventListener('focusout', () => {
+            if(deferredChange) setTimeout(() => {
+                if(!ledgerEditorFocused()) { applyLiveDataChange(); }
+            },350);
+        });
+
         function startAutoPolling() {
             if (autoPollingInterval) clearInterval(autoPollingInterval);
+            startChangeStream();
             let pollingTime = 3000;
 
             autoPollingInterval = setInterval(() => {
@@ -603,10 +647,9 @@
                 let isUserTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT');
                 let isRecentlyClicked = (Date.now() - lastInteractionTime < 2500);
 
+                if (document.getElementById('moduleInquiry').classList.contains('active')) loadInquiryDataSilent().catch(console.error);
                 if (isUserTyping || isRecentlyClicked) return;
-
-                loadInquiryDataSilent();
-                loadLedgerDataSilent();
+                if (document.getElementById('moduleLedger').classList.contains('active')) applyLiveDataChange();
             }, pollingTime);
         }
 
@@ -929,6 +972,7 @@
                 const inqRes = await fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`);
                 if (!inqRes.ok) throw new Error('HTTP ' + inqRes.status);
                 cachedInquiryData = await inqRes.json();
+            renderInquiryCounts(cachedInquiryData);
                 cachedLedgerData = await fetchPagedRows(`${API_BASE}/api/ledger-data?sheet_name=${currentLedgerSheet}&mode=${currentLedgerSubView}`);
                 renderLedgerTableUI(cachedLedgerData);
                 await finishLoadProgress();
@@ -942,10 +986,14 @@
             ]);
             const newLedger = await ledgerRes.json();
             cachedInquiryData = await inqRes.json();
+            renderInquiryCounts(cachedInquiryData);
 
+            const changed=deferredChange || JSON.stringify(cachedLedgerData)!==JSON.stringify(newLedger);
             cachedLedgerData = newLedger;
-            if (document.getElementById('moduleLedger').classList.contains('active')) {
+            if (document.getElementById('moduleLedger').classList.contains('active') && ledgerEditorFocused()) deferredChange = true;
+            if (changed && document.getElementById('moduleLedger').classList.contains('active') && !ledgerEditorFocused()) {
                 renderLedgerTableUI(cachedLedgerData);
+                deferredChange = false;
             }
         }
 
@@ -1221,12 +1269,8 @@ async function updateLedgerCell(rowIdx, fieldName, fieldValue) {
             loadLedgerData();
         }
 
-        async function loadInquiryData() {
-            showProgressOverlay();
-            const res = await fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`);
-            const data = await res.json();
-            cachedInquiryData = data;
-
+        function renderInquiryCounts(data) {
+            if (!data || !data.summary) return;
             document.getElementById('inqKpiTotal').innerText = data.summary.total;
             document.getElementById('inqKpiOpen').innerText = data.summary.open;
             document.getElementById('inqKpiClose').innerText = data.summary.close;
@@ -1252,6 +1296,15 @@ async function updateLedgerCell(rowIdx, fieldName, fieldValue) {
             });
             document.getElementById('inqTeamGridContainer').innerHTML = gridHtml;
 
+        }
+
+        async function loadInquiryData() {
+            showProgressOverlay();
+            const res = await fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`);
+            const data = await res.json();
+            cachedInquiryData = data;
+
+            renderInquiryCounts(data);
             filterAndRenderInquiryTable();
             hideProgressOverlay();
         }
@@ -1259,6 +1312,7 @@ async function updateLedgerCell(rowIdx, fieldName, fieldValue) {
         async function loadInquiryDataSilent() {
             const res = await fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`);
             const data = await res.json();
+            renderInquiryCounts(data);
             if (JSON.stringify(cachedInquiryData) !== JSON.stringify(data)) {
                 cachedInquiryData = data;
                 filterAndRenderInquiryTable();

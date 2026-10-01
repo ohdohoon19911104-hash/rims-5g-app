@@ -231,7 +231,7 @@ def _upsert_with_fallback(table_name: str, records: List[dict], conflict_col: st
         ).execute())
 
 @router.get("/tat-data")
-def get_tat_data(offset: int = 0, limit: int = 0):
+def get_tat_data(offset: int = 0, limit: int = 0, known_total: int = -1):
     token = None
     transport = None
     try:
@@ -244,9 +244,9 @@ def get_tat_data(offset: int = 0, limit: int = 0):
         if limit:
             step = min(max(limit, 1), 1000)
         while True:
-            res = _execute_with_retry(lambda: _tat_database().table("tat_data").select("*", count="exact" if limit else None).order("id", desc=False).range(start, start + step - 1).execute())
+            res = _execute_with_retry(lambda: _tat_database().table("tat_data").select("*", count="exact" if limit and known_total < 0 else None).order("id", desc=False).range(start, start + step - 1).execute())
             if limit:
-                total = res.count
+                total = known_total if known_total >= 0 else res.count
             rows = res.data or []
             all_data.extend(rows)
             if limit or len(rows) < step:
