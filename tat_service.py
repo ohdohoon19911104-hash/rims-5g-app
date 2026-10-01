@@ -3,6 +3,8 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from typing import Any, List
 import pandas as pd
+from openpyxl import load_workbook
+from functools import lru_cache
 from datetime import datetime, timedelta
 from database import supabase
 
@@ -38,6 +40,7 @@ def safe_cell(row: Any, idx: int, default: str = "") -> str:
 # REQ] REPAIR IN Date(入庫日) 기준으로 주말/일본공휴일을 "포함해서"
 # 달력 일수로 카운트 한다 (UQ 90일 / KDDI 60일 / NEC 45일 / DOCOMO 30일)
 # =====================================================================
+@lru_cache(maxsize=4096)
 def calculate_carrier_deadline(repair_in_str: str, customer: str) -> str:
     clean_s = clean_date_str(repair_in_str)
     if not clean_s: return '-'
@@ -57,6 +60,7 @@ def calculate_carrier_deadline(repair_in_str: str, customer: str) -> str:
 # REQ] REPAIR IN Date(入庫日) 기준으로 주말/일본공휴일을 "포함하지 않고"
 # 영업일 기준으로 13일을 카운트 한다
 # =====================================================================
+@lru_cache(maxsize=4096)
 def calculate_13_working_days_deadline(repair_in_str: str) -> str:
     clean_s = clean_date_str(repair_in_str)
     if not clean_s: return '-'
@@ -136,29 +140,12 @@ def _chunked_list(seq: List[Any], size: int = 500):
         yield seq[i:i + size]
 
 def _upsert_with_fallback(table_name: str, records: List[dict], conflict_col: str) -> None:
-    """일괄 upsert 실행 실패 시(on_conflict 대상 컬럼에 유니크 제약이 없는 경우 등)
-    기존 키 조회 방식의 수동 upsert로 전환해서 저장한다"""
-    try:
-        supabase.table(table_name).upsert(records, on_conflict=conflict_col).execute()
-        return
-    except Exception as e:
-        print(f"[TAT upload] bulk upsert failed -> manual sync: {e}")
-
-    keys = [str(r[conflict_col]) for r in records if r.get(conflict_col) not in (None, "")]
-    existing_keys = set()
-    for chunk in _chunked_list(keys):
-        if not chunk: continue
-        res = supabase.table(table_name).select(conflict_col).in_(conflict_col, chunk).execute()
-        for r in (res.data or []):
-            existing_keys.add(str(r.get(conflict_col)))
-
-    inserts = [r for r in records if str(r.get(conflict_col)) not in existing_keys]
-    updates = [r for r in records if str(r.get(conflict_col)) in existing_keys]
-
-    if inserts:
-        supabase.table(table_name).insert(inserts).execute()
-    for r in updates:
-        supabase.table(table_name).update(r).eq(conflict_col, r[conflict_col]).execute()
+    """小分けで保存し、不要な保存結果の返却を抑制します。"""
+    unique_records = {r[conflict_col]: r for r in records}
+    for batch in _chunked_list(list(unique_records.values()), 200):
+        supabase.table(table_name).upsert(
+            batch, on_conflict=conflict_col, returning="minimal"
+        ).execute()
 
 @router.get("/tat-data")
 async def get_tat_data():
@@ -231,19 +218,36 @@ async def get_tat_data():
         return []
 
 @router.post("/upload-excel")
-async def upload_excel(file: UploadFile = File(...)):
+def upload_excel(file: UploadFile = File(...)):
+    workbook = None
+    saved_count = 0
     try:
-        df = pd.read_excel(file.file, header=None)
-        header_idx = 0
-        for idx, row in df.iterrows():
-            first_cell = safe_cell(row, 0)
-            if "修理" in first_cell or "Customer" in str(safe_cell(row, 1)):
-                header_idx = idx
-                break
+        # 毎回最新のカラムを確認し、原本の項目を省略しません。
+        _live_col_cache.pop("tat_data", None)
+        required = (set(TAT_CORE_COLUMNS) - {"reason"}) | set(TAT_EXTENDED_COLUMNS)
+        live = _probe_existing_columns("tat_data", sorted(required))
+        missing = required - live
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail="必要なデータベース項目が不足しています。SQLを実行してください: " + ", ".join(sorted(missing))
+            )
+        file.file.seek(0)
+        if (file.filename or "").lower().endswith(".xls"):
+            dataframe = pd.read_excel(file.file, header=None)
+            rows = dataframe.itertuples(index=False, name=None)
+        else:
+            workbook = load_workbook(file.file, read_only=True, data_only=True)
+            sheet = workbook.worksheets[0]
+            rows = sheet.iter_rows(values_only=True)
 
-        data_df = df.iloc[header_idx + 1:].copy()
+        header_found = False
         records = []
-        for idx, row in data_df.iterrows():
+        for row in rows:
+            if not header_found:
+                if "修理" in safe_cell(row, 0) or "Customer" in safe_cell(row, 1):
+                    header_found = True
+                continue
             wq_val = safe_cell(row, 0)
             if not wq_val or wq_val == '-' or "修理" in wq_val or wq_val.upper() == "WQ": continue
 
@@ -297,13 +301,26 @@ async def upload_excel(file: UploadFile = File(...)):
                 "tat13_deadline": calculate_13_working_days_deadline(repair_in)
             })
 
-        if records:
-            # 존재하지 않는 컬럼은 자동으로 제외한 뒤 저장
-            filtered = _filter_records_by_live_columns(records, "tat_data", TAT_CORE_COLUMNS, TAT_EXTENDED_COLUMNS)
-            filtered = [r for r in filtered if r.get("wq")]
-            if filtered:
-                _upsert_with_fallback("tat_data", filtered, "wq")
+            if len(records) >= 200:
+                _upsert_with_fallback("tat_data", records, "wq")
+                saved_count += len(records)
+                records.clear()
 
-        return {"inserted": len(records), "ignored": 0, "success": True}
+        if not header_found:
+            raise HTTPException(status_code=400, detail="簡易版日報の見出し行が見つかりません。")
+        if records:
+            _upsert_with_fallback("tat_data", records, "wq")
+            saved_count += len(records)
+        if saved_count == 0:
+            raise HTTPException(status_code=400, detail="保存対象のデータがありません。")
+        return {"inserted": saved_count, "ignored": 0, "success": True}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"TAT 엑셀 파일 해석/DB 저장 오류: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"簡易版日報の解析・保存に失敗しました。保存済み: {saved_count}件。再アップロードで続行できます。詳細: {str(e)}"
+        )
+    finally:
+        if workbook is not None:
+            workbook.close()

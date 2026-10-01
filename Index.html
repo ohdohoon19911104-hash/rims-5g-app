@@ -230,7 +230,7 @@
                 <div class="right-table-card">
                     <table>
                         <thead>
-                            <tr><th>WQ番号</th><th>顧客</th><th>カテゴリ</th><th>無線機名</th><th>シリアル</th><th>超過区分</th><th>Status</th><th>事業者TAT</th><th>13日TAT</th><th>遅延理由</th></tr>
+                            <tr><th>WQ番号</th><th>顧客</th><th>カテゴリ</th><th>無線機名</th><th>シリアル</th><th>超過区分</th><th>Status</th><th>事業者TAT</th><th>13日TAT</th><th>期間内返却可否</th><th>遅延理由</th></tr>
                         </thead>
                         <tbody id="tatTableBody"></tbody>
                     </table>
@@ -686,6 +686,7 @@
                     <td>${i.status}</td>
                     <td><b>${cleanVal(i.kddiUqMust || i.carrierDeadline)}</b></td>
                     <td><b>${cleanVal(i.centerMust || i.tat13Deadline)}</b></td>
+                    <td style="text-align:center;"><input type="checkbox" disabled ${i.periodReturnCan ? 'checked' : ''}></td>
                     <td>${i.delayReason || ''}</td>
                 </tr>
             `).join('');
@@ -779,7 +780,9 @@
                     return;
                 }
                 alert(`同期完了! (保存件数: ${body.inserted}件)`);
-                loadTatData();
+                await loadTatData();
+            } catch (e) {
+                alert("同期処理中に通信エラーが発生しました。画面を再読み込みして保存状況を確認してください。");
             } finally {
                 hideProgressOverlay();
             }
@@ -855,7 +858,7 @@
             if (isDocomo) headHtml += '<th>入庫ログ</th><th>FMHisログ</th><th>CAL</th><th>特性試験</th><th>NTFログ</th><th>出庫ログ</th><th>ロック</th>';
             if (isUqRrh) headHtml += '<th>再現試験結果1_1</th><th>再現試験結果1_2</th><th>再現試験結果2_1</th><th>再現試験結果2_2</th><th>資材コード</th><th>シリアル</th>';
             else headHtml += '<th style="min-width:180px;">再現試験結果</th>';
-            headHtml += '<th style="min-width:180px;">修理内容</th><th style="min-width:100px; text-align:center;">担当者</th><th style="min-width:150px;">Request No.</th><th style="min-width:80px; text-align:center;">Customer</th><th style="min-width:150px; text-align:center;">Technical Category</th><th style="min-width:120px;">Model Code</th><th style="min-width:120px;">Part Code</th><th style="min-width:220px;">Part Desc</th><th style="min-width:200px;">Symptom</th><th style="min-width:80px; text-align:center;">Re defect</th><th style="min-width:100px; text-align:center;">No of Request</th><th style="min-width:110px; text-align:center;">Difference Day</th><th style="min-width:110px; text-align:center;">Received Date</th><th style="min-width:180px;">遅延理由</th></tr>';
+            headHtml += '<th style="min-width:180px;">修理内容</th><th style="min-width:100px; text-align:center;">担当者</th><th style="min-width:150px;">Request No.</th><th style="min-width:80px; text-align:center;">Customer</th><th style="min-width:150px; text-align:center;">Technical Category</th><th style="min-width:120px;">Model Code</th><th style="min-width:120px;">Part Code</th><th style="min-width:220px;">Part Desc</th><th style="min-width:200px;">Symptom</th><th style="min-width:80px; text-align:center;">Re defect</th><th style="min-width:100px; text-align:center;">No of Request</th><th style="min-width:110px; text-align:center;">Difference Day</th><th style="min-width:110px; text-align:center;">Received Date</th><th style="min-width:100px; text-align:center;">期間内返却可否</th><th style="min-width:180px;">遅延理由</th></tr>';
 
             document.getElementById('ledgerTableHead').innerHTML = headHtml;
 
@@ -922,6 +925,7 @@
                 row += `<td style="text-align:center;">${mgrSel}</td><td><b>${rawVal(item.requestNo)}</b></td><td style="text-align:center;">${rawVal(item.customer)}</td><td style="text-align:center;">${rawVal(item.techCategory)}</td><td>${rawVal(item.modelCode)}</td><td>${rawVal(item.partCode)}</td><td>${rawVal(item.partDesc)}</td><td>${rawVal(item.symptom)}</td>`;
                 row += `<td style="text-align:center;">${rawVal(item.reDefect)||'N'}</td><td style="text-align:center;">${rawVal(item.noOfRequest)||'1'}</td><td style="text-align:center;">${rawVal(item.differenceDay)||'-'}</td><td style="text-align:center;"><b>${cleanVal(item.receivedDate)}</b></td>`;
                 
+                row += `<td style="text-align:center;"><input type="checkbox" ${disAttr} ${item.periodReturnCan ? 'checked' : ''} onchange="updateLedgerCell('${item.rowIdx}', 'periodReturnCan', this.checked)"></td>`;
                 row += `<td><textarea style="${textareaStyle}" ${roAttr} placeholder="手動入力" oninput="updateLedgerCellInstant('${item.rowIdx}', 'delayReason', this.value)">${rawVal(item.delayReason)}</textarea></td></tr>`;
                 return row;
             }).join('');
