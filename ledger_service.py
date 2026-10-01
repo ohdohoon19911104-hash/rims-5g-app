@@ -78,7 +78,7 @@ LEDGER_CORE_COLUMNS = [
 ]
 
 # 将来テーブルに追加カラム(ADD COLUMN)を実施した場合に自動で保存対象へ含める拡張カラム
-LEDGER_EXTENDED_COLUMNS = ["period_return_can"]
+LEDGER_EXTENDED_COLUMNS = []
 
 def _probe_existing_columns(table_name: str, candidates: List[str]) -> set:
     """候補カラムの中で実テーブルに存在するものだけを抽出して返す"""
@@ -158,9 +158,6 @@ async def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is
             rec_date = clean_date_str(r.get("receive_date"))
             calc_tat = calculate_working_days(rec_date)
 
-            p_can = r.get("period_return_can")
-            is_checked = True if p_can in [True, "true", "True", 1, "1", "OK", "ok"] else False
-
             result.append({
                 "rowIdx": r["id"], "no": i + 1, "status": r.get("status", "再現試験待機"),
                 "cartNo": r.get("cart_no", ""), "chkLabel": r.get("chk_label", False),
@@ -177,7 +174,7 @@ async def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is
                 "modelCode": r.get("model_code", ""), "partCode": r.get("part_code", ""), "partDesc": r.get("part_desc", ""),
                 "symptom": r.get("symptom", ""), "reDefect": r.get("re_defect", ""), "noOfRequest": r.get("no_of_request", ""),
                 "differenceDay": r.get("difference_day", ""), "receivedDate": clean_date_str(r.get("received_date")), 
-                "periodReturnCan": is_checked, "delayReason": r.get("delay_reason", "")
+                "delayReason": r.get("delay_reason", "")
             })
         return result
     except Exception as e:
@@ -235,7 +232,6 @@ async def upload_ledger_excel(file: UploadFile = File(...)):
                 "difference_day": safe_cell(row, 50, "-"), 
                 "receive_date": repair_in_dt,
                 "received_date": clean_date_str(safe_cell(row, 56)), 
-                "period_return_can": False,
                 "is_outbound": False
             })
 
@@ -281,32 +277,12 @@ async def update_ledger_cell_field(req: LedgerCellFieldUpdate):
             "repairDetail": "repair_detail", "manager": "manager", "delayReason": "delay_reason",
             "reproduceResult": "reproduce_result", "chkInboundLog": "chk_inbound_log",
             "chkFmHisLog": "chk_fm_his_log", "chkCal": "chk_cal", "chkCharacteristic": "chk_characteristic",
-            "chkNtfLog": "chk_ntf_log", "chkOutboundLog": "chk_outbound_log", "chkLock": "chk_lock",
-            "periodReturnCan": "period_return_can"
+            "chkNtfLog": "chk_ntf_log", "chkOutboundLog": "chk_outbound_log", "chkLock": "chk_lock"
         }
         db_field = field_map.get(req.fieldName, req.fieldName)
-        bool_val = bool(req.fieldValue) if req.fieldName == "periodReturnCan" else req.fieldValue
 
-        # 1. ledger_data 테이블 업데이트 (period_return_can)
-        supabase.table("ledger_data").update({db_field: bool_val}).eq("id", req.rowIdx).execute()
-
-        # 2. tat_data 테이블 연동 업데이트 (기존 컬럼 repair_can 활용: 체크 시 "OK", 해제 시 "")
-        if req.fieldName == "periodReturnCan":
-            repair_can_str = "OK" if bool_val else ""
-            res = supabase.table("ledger_data").select("sn_large, sn_small, request_no").eq("id", req.rowIdx).execute()
-            if res.data:
-                item = res.data[0]
-                sn_l = str(item.get("sn_large") or '').strip()
-                sn_s = str(item.get("sn_small") or '').strip()
-                req_no = str(item.get("request_no") or '').strip()
-
-                # tat_data의 기존 컬럼 repair_can 업데이트
-                if sn_l:
-                    supabase.table("tat_data").update({"repair_can": repair_can_str}).eq("sn", sn_l).execute()
-                if sn_s and sn_s != sn_l:
-                    supabase.table("tat_data").update({"repair_can": repair_can_str}).eq("sn", sn_s).execute()
-                if req_no:
-                    supabase.table("tat_data").update({"repair_can": repair_can_str}).eq("wq", req_no).execute()
+        # 1. ledger_data 테이블 업데이트
+        supabase.table("ledger_data").update({db_field: req.fieldValue}).eq("id", req.rowIdx).execute()
 
         return {"success": True}
     except Exception as e:
