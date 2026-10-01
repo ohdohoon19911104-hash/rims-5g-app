@@ -100,11 +100,18 @@
         .badge-danger { background-color: var(--danger-bg); color: var(--danger); border: 1px solid #fca5a5; }
         .badge-success { background-color: var(--success-bg); color: var(--success); border: 1px solid #86efac; }
         .badge-purple { background-color: var(--purple-light); color: var(--purple); border: 1px solid #c084fc; }
+        .return-checkbox { appearance:none; width:20px; height:20px; border:2px solid #2563eb; border-radius:4px; background:#fff; opacity:1 !important; vertical-align:middle; }
+        .return-checkbox:checked { background:#2563eb; }
+        .return-checkbox:checked::after { content:""; display:block; width:5px; height:10px; margin:1px 0 0 5px; border:solid white; border-width:0 2px 2px 0; transform:rotate(45deg); }
+        .return-checkbox:disabled { cursor:default; }
     </style>
 </head>
 <body>
 
-    <div id="loadingOverlay" class="loading-overlay">データ処理中...</div>
+    <div id="loadingOverlay" class="loading-overlay"><div style="width:340px;text-align:center;">
+        <div id="loadingLabel">データ読み込み</div>
+        <div style="margin:12px 0;background:#dbeafe;height:14px;border-radius:8px;overflow:hidden;"><div id="loadingBar" style="width:0%;height:100%;background:#2563eb;transition:width .15s linear;"></div></div>
+        <div id="loadingPercent">0%</div></div></div>
 
     <div id="viewLogin" class="login-wrapper">
         <div class="login-card">
@@ -415,8 +422,40 @@
         const reproduceOptions1 = ["", "A", "B", "C", "D", "A-B", "A-D", "C-D", "B-C", "A,C", "B,D", "A-B,D", "A-C", "A,D", "B-D"];
         const reproduceOptions2 = ["", "LOW GAIN", "NTF", "OVER POWER,VSWR FAIL", "POWER FAIL", "RSSI FAIL", "CPRI FAIL", "VSWR FAIL", "CLOCK FAIL", "BURNT", "CAL FAIL", "OVER POWER"];
 
-        function showProgressOverlay() { document.getElementById('loadingOverlay').style.display = 'flex'; }
+        function setLoadProgress(value) {
+            const percent = Math.max(0, Math.min(100, Math.floor(value)));
+            document.getElementById('loadingBar').style.width = percent + '%';
+            document.getElementById('loadingPercent').innerText = percent + '%';
+        }
+        function showProgressOverlay() {
+            setLoadProgress(0);
+            document.getElementById('loadingLabel').innerText = 'データ読み込み・処理中';
+            document.getElementById('loadingOverlay').style.display = 'flex';
+        }
         function hideProgressOverlay() { document.getElementById('loadingOverlay').style.display = 'none'; }
+        async function finishLoadProgress() {
+            setLoadProgress(100);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            hideProgressOverlay();
+        }
+        async function fetchPagedRows(url, startPercent=0, endPercent=100) {
+            const rows = [];
+            let offset = 0;
+            while (true) {
+                const join = url.includes('?') ? '&' : '?';
+                const res = await fetch(`${url}${join}offset=${offset}&limit=500`, {cache:'no-store'});
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const page = await res.json();
+                if (!page || !Array.isArray(page.rows) || !Number.isFinite(page.total)) throw new Error('読み込み結果が不正です');
+                rows.push(...page.rows);
+                offset += page.rows.length;
+                if (offset >= page.total) break;
+                if (!page.rows.length) throw new Error('読み込みが途中で停止しました');
+                setLoadProgress(startPercent + (endPercent-startPercent) * offset/page.total);
+                await new Promise(resolve => requestAnimationFrame(resolve));
+            }
+            return rows;
+        }
 
         function rawVal(v) {
             if (v === null || v === undefined) return '';
@@ -528,12 +567,32 @@
             document.getElementById('viewDashboard').style.display = 'none';
         }
 
+        let tatStateBusy = false;
+        async function refreshTatReturnState() {
+            if (tatStateBusy || !currentUserSession || !document.getElementById('moduleTat').classList.contains('active')) return;
+            tatStateBusy = true;
+            try {
+                const res = await fetch(`${API_BASE}/api/tat-return-state`, {cache:'no-store'});
+                if (!res.ok) return;
+                const states = new Map((await res.json()).map(r => [r.id, !!r.period_return_can]));
+                let changed = false;
+                cachedTatRawList.forEach(r => {
+                    if (states.has(r.rowIdx) && r.periodReturnCan !== states.get(r.rowIdx)) {
+                        r.periodReturnCan = states.get(r.rowIdx); changed = true;
+                    }
+                });
+                if (changed) applyTatFilters();
+            } catch (e) { console.error('チェック状態の更新に失敗しました', e); }
+            finally { tatStateBusy = false; }
+        }
+
         function startAutoPolling() {
             if (autoPollingInterval) clearInterval(autoPollingInterval);
             let pollingTime = 3000;
 
             autoPollingInterval = setInterval(() => {
                 if (!currentUserSession) return;
+                refreshTatReturnState();
                 let activeEl = document.activeElement;
                 let isUserTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT');
                 let isRecentlyClicked = (Date.now() - lastInteractionTime < 2500);
@@ -586,11 +645,12 @@
 
         async function loadTatData() {
             showProgressOverlay();
-            const res = await fetch(`${API_BASE}/api/tat-data`);
-            cachedTatRawList = await res.json();
-            populateTatFilterOptions(cachedTatRawList);
-            applyTatFilters();
-            hideProgressOverlay();
+            try {
+                cachedTatRawList = await fetchPagedRows(`${API_BASE}/api/tat-data`);
+                populateTatFilterOptions(cachedTatRawList);
+                applyTatFilters();
+                await finishLoadProgress();
+            } catch (e) { hideProgressOverlay(); alert('読み込み失敗: ' + e.message); }
         }
 
         function populateTatFilterOptions(rawList) {
@@ -686,7 +746,7 @@
                     <td>${i.status}</td>
                     <td><b>${cleanVal(i.kddiUqMust || i.carrierDeadline)}</b></td>
                     <td><b>${cleanVal(i.centerMust || i.tat13Deadline)}</b></td>
-                    <td style="text-align:center;"><input type="checkbox" disabled ${i.periodReturnCan ? 'checked' : ''}></td>
+                    <td style="text-align:center;"><input class="return-checkbox" type="checkbox" disabled ${i.periodReturnCan ? 'checked' : ''}></td>
                     <td>${i.delayReason || ''}</td>
                 </tr>
             `).join('');
@@ -719,6 +779,8 @@
             cachedTatRawList.forEach(i => {
                 if (Array.isArray(i.excelValues) && i.excelValues.length === 33) {
                     const values = i.excelValues.map(v => v ?? "");
+                    values[7] = i.carrierDeadline ?? values[7];
+                    values[12] = i.tat13Deadline ?? values[12];
                     const rawCan = String(values[22]).trim().toUpperCase();
                     const originalChecked = ["O", "OK", "TRUE", "1", "YES"].includes(rawCan);
                     if (!!i.periodReturnCan !== originalChecked) {
@@ -812,7 +874,7 @@
                     alert("台帳同期失敗: " + (body.detail || body.message || ("HTTP " + res.status)));
                     return;
                 }
-                alert(`台帳同期完了! (保存件数: ${body.inserted}件)`);
+                alert(`台帳同期完了! (追加: ${body.inserted}件 / 重複スキップ: ${body.ignored ?? 0}件)`);
                 loadLedgerData();
             } finally {
                 hideProgressOverlay();
@@ -828,15 +890,14 @@
 
         async function loadLedgerData() {
             showProgressOverlay();
-            const [ledgerRes, inqRes] = await Promise.all([
-                fetch(`${API_BASE}/api/ledger-data?sheet_name=${currentLedgerSheet}&mode=${currentLedgerSubView}`),
-                fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`)
-            ]);
-            cachedLedgerData = await ledgerRes.json();
-            cachedInquiryData = await inqRes.json();
-
-            renderLedgerTableUI(cachedLedgerData);
-            hideProgressOverlay();
+            try {
+                const inqRes = await fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`);
+                if (!inqRes.ok) throw new Error('HTTP ' + inqRes.status);
+                cachedInquiryData = await inqRes.json();
+                cachedLedgerData = await fetchPagedRows(`${API_BASE}/api/ledger-data?sheet_name=${currentLedgerSheet}&mode=${currentLedgerSubView}`);
+                renderLedgerTableUI(cachedLedgerData);
+                await finishLoadProgress();
+            } catch (e) { hideProgressOverlay(); alert('読み込み失敗: ' + e.message); }
         }
 
         async function loadLedgerDataSilent() {
@@ -935,7 +996,7 @@
                 row += `<td style="text-align:center;">${mgrSel}</td><td><b>${rawVal(item.requestNo)}</b></td><td style="text-align:center;">${rawVal(item.customer)}</td><td style="text-align:center;">${rawVal(item.techCategory)}</td><td>${rawVal(item.modelCode)}</td><td>${rawVal(item.partCode)}</td><td>${rawVal(item.partDesc)}</td><td>${rawVal(item.symptom)}</td>`;
                 row += `<td style="text-align:center;">${rawVal(item.reDefect)||'N'}</td><td style="text-align:center;">${rawVal(item.noOfRequest)||'1'}</td><td style="text-align:center;">${rawVal(item.differenceDay)||'-'}</td><td style="text-align:center;"><b>${cleanVal(item.receivedDate)}</b></td>`;
                 
-                row += `<td style="text-align:center;"><input type="checkbox" ${disAttr} ${item.periodReturnCan ? 'checked' : ''} onchange="updateLedgerCell('${item.rowIdx}', 'periodReturnCan', this.checked)"></td>`;
+                row += `<td style="text-align:center;"><input class="return-checkbox" type="checkbox" ${disAttr} ${item.periodReturnCan ? 'checked' : ''} onchange="updateLedgerCell('${item.rowIdx}', 'periodReturnCan', this.checked)"></td>`;
                 row += `<td><textarea style="${textareaStyle}" ${roAttr} placeholder="手動入力" oninput="updateLedgerCellInstant('${item.rowIdx}', 'delayReason', this.value)">${rawVal(item.delayReason)}</textarea></td></tr>`;
                 return row;
             }).join('');

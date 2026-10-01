@@ -181,16 +181,21 @@ def _upsert_with_fallback(table_name: str, records: List[dict], conflict_col: st
         ).execute())
 
 @router.get("/tat-data")
-def get_tat_data():
+def get_tat_data(offset: int = 0, limit: int = 0):
     try:
         all_data = []
         step = 1000
-        start = 0
+        start = max(offset, 0) if limit else 0
+        total = None
+        if limit:
+            step = min(max(limit, 1), 1000)
         while True:
-            res = supabase.table("tat_data").select("*").order("id", desc=False).range(start, start + step - 1).execute()
+            res = supabase.table("tat_data").select("*", count="exact" if limit else None).order("id", desc=False).range(start, start + step - 1).execute()
+            if limit:
+                total = res.count
             rows = res.data or []
             all_data.extend(rows)
-            if len(rows) < step:
+            if limit or len(rows) < step:
                 break
             start += step
 
@@ -199,9 +204,9 @@ def get_tat_data():
             repair_in = clean_date_str(r.get("req_repair_in_date") or r.get("req_receive_date"))
             cust = r.get("customer", "")
             # 事業者TAT: 엑셀 H열 값 우선, 없으면 입고일 기준 계산값(주말/공휴일 포함 달력일수)
-            carrier_dl = r.get("kddi_uq_must") or r.get("carrier_deadline") or calculate_carrier_deadline(repair_in, cust)
+            carrier_dl = calculate_carrier_deadline(repair_in, cust) if repair_in else (r.get("carrier_deadline") or r.get("kddi_uq_must") or "")
             # 13日TAT: 엑셀 M열 값 우선, 없으면 입고일 기준 계산값(주말/공휴일 제외 영업일 13일)
-            tat13_dl = r.get("center_must") or r.get("tat13_deadline") or calculate_13_working_days_deadline(repair_in)
+            tat13_dl = calculate_13_working_days_deadline(repair_in) if repair_in else (r.get("tat13_deadline") or r.get("center_must") or "")
 
             result.append({
                 "rowIdx": r["id"],
@@ -255,7 +260,7 @@ def get_tat_data():
                     "pba_open_close", "flag_mark", "sub_alarm", "sub_date", "summary_use"
                 )]
             })
-        return result
+        return {"rows": result, "total": total} if limit else result
     except Exception as e:
         print(f"Error fetching tat data: {e}")
         return []
@@ -373,3 +378,17 @@ def upload_excel(file: UploadFile = File(...)):
                 workbook.close()
         finally:
             _upload_lock.release()
+
+
+@router.get("/tat-return-state")
+def get_tat_return_state():
+    result = []
+    start = 0
+    while True:
+        response = _execute_with_retry(lambda: supabase.table("tat_data").select("id,period_return_can").order("id").range(start, start + 999).execute())
+        rows = response.data or []
+        result.extend(rows)
+        if len(rows) < 1000:
+            break
+        start += 1000
+    return result

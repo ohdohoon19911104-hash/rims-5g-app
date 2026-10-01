@@ -1,4 +1,5 @@
 import re
+import threading
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from typing import Any, List
@@ -147,24 +148,29 @@ def _upsert_with_fallback(table_name: str, records: List[dict], conflict_col: st
         supabase.table(table_name).update(r).eq(conflict_col, r[conflict_col]).execute()
 
 @router.get("/ledger-data")
-async def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is_outbound: bool = False):
+def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is_outbound: bool = False, offset: int = 0, limit: int = 0):
     try:
         target_outbound = True if mode == "completed" or is_outbound else False
 
         all_data = []
         step = 1000
-        start = 0
+        start = max(offset, 0) if limit else 0
+        total = None
+        if limit:
+            step = min(max(limit, 1), 1000)
         # is_outbound 컬럼이 테이블에 없는 경우(수동 DB 작업 등)에도
         # 조회 오류로 화면 전체가 깨지지 않도록 존재 여부를 확인 후 필터링한다
         live_cols = _probe_existing_columns("ledger_data", LEDGER_CORE_COLUMNS + LEDGER_EXTENDED_COLUMNS)
         while True:
-            q = supabase.table("ledger_data").select("*").eq("sheet_name", sheet_name)
+            q = supabase.table("ledger_data").select("*", count="exact" if limit else None).eq("sheet_name", sheet_name)
             if "is_outbound" in live_cols:
                 q = q.eq("is_outbound", target_outbound)
             res = q.order("id", desc=False).range(start, start + step - 1).execute()
+            if limit:
+                total = res.count
             rows = res.data or []
             all_data.extend(rows)
-            if len(rows) < step:
+            if limit or len(rows) < step:
                 break
             start += step
 
@@ -178,7 +184,7 @@ async def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is
             is_checked = True if p_can in [True, "true", "True", 1, "1", "OK", "ok"] else False
 
             result.append({
-                "rowIdx": r["id"], "no": i + 1, "status": r.get("status", "再現試験待機"),
+                "rowIdx": r["id"], "no": i + 1 + (offset if limit else 0), "status": r.get("status", "再現試験待機"),
                 "cartNo": r.get("cart_no", ""), "chkLabel": r.get("chk_label", False),
                 "snLarge": r.get("sn_large", ""), "snSmall": r.get("sn_small", ""), "internalInfo": r.get("internal_info", ""),
                 "status2": r.get("status2", "-"), "alarmName": r.get("alarm_name", "-"), "categoryName": r.get("category_name", "-"),
@@ -198,13 +204,17 @@ async def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is
                 # 대장관리의 遅延理由 (수리TAT의 delay_reason과 동일 이름으로 연동)
                 "delayReason": r.get("delay_reason", "")
             })
-        return result
+        return {"rows": result, "total": total} if limit else result
     except Exception as e:
         print(f"Error fetching ledger data: {e}")
         return []
 
+_ledger_upload_lock = threading.Lock()
+
 @router.post("/upload-ledger-excel")
-async def upload_ledger_excel(file: UploadFile = File(...)):
+def upload_ledger_excel(file: UploadFile = File(...)):
+    if not _ledger_upload_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="台帳取り込みを処理中です。完了後に再実行してください。")
     try:
         df = pd.read_excel(file.file, header=None)
         header_idx = 0
@@ -259,16 +269,40 @@ async def upload_ledger_excel(file: UploadFile = File(...)):
                 "is_outbound": False
             })
 
-        if records:
-            # 존재하지 않는 컬럼은 자동으로 제외한 뒤 저장
-            filtered = _filter_records_by_live_columns(records, "ledger_data", LEDGER_CORE_COLUMNS, LEDGER_EXTENDED_COLUMNS)
-            filtered = [r for r in filtered if r.get("request_no")]
-            if filtered:
-                _upsert_with_fallback("ledger_data", filtered, "request_no")
-
-        return {"inserted": len(records), "ignored": 0, "success": True}
+        existing = {}
+        for keys in _chunked_list(list({r["request_no"] for r in records}), 200):
+            start = 0
+            while True:
+                response = supabase.table("ledger_data").select("request_no,sn_large,sn_small").in_("request_no", keys).range(start, start + 999).execute()
+                found = response.data or []
+                for row in found:
+                    existing[row["request_no"]] = row
+                if len(found) < 1000:
+                    break
+                start += 1000
+        new_records = []
+        ignored = 0
+        for row in records:
+            key = row["request_no"]
+            previous = existing.get(key)
+            if previous is not None:
+                if (str(previous.get("sn_large") or "").strip(), str(previous.get("sn_small") or "").strip()) != (row["sn_large"], row["sn_small"]):
+                    raise HTTPException(status_code=409, detail=f"同じWQ番号でシリアルが異なります。既存データは変更しません: {key}")
+                ignored += 1
+                continue
+            existing[key] = row
+            new_records.append(row)
+        if new_records:
+            filtered = _filter_records_by_live_columns(new_records, "ledger_data", LEDGER_CORE_COLUMNS, LEDGER_EXTENDED_COLUMNS)
+            for batch in _chunked_list(filtered, 200):
+                supabase.table("ledger_data").insert(batch, returning="minimal").execute()
+        return {"inserted": len(new_records), "ignored": ignored, "success": True}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"ファイル解析・DB同期エラー: {str(e)}")
+    finally:
+        _ledger_upload_lock.release()
 
 class LedgerStatusUpdate(BaseModel):
     sheetName: str
@@ -320,12 +354,9 @@ async def update_ledger_cell_field(req: LedgerCellFieldUpdate):
                 sn_s = str(item.get("sn_small") or '').strip()
                 req_no = str(item.get("request_no") or '').strip()
 
-                if sn_l:
-                    supabase.table("tat_data").update({"period_return_can": bool_val}).eq("sn", sn_l).execute()
-                if sn_s and sn_s != sn_l:
-                    supabase.table("tat_data").update({"period_return_can": bool_val}).eq("sn", sn_s).execute()
                 if req_no:
-                    supabase.table("tat_data").update({"period_return_can": bool_val}).eq("wq", req_no).execute()
+                    for serial in set(filter(None, (sn_l, sn_s))):
+                        supabase.table("tat_data").update({"period_return_can": bool_val}).eq("wq", req_no).eq("sn", serial).execute()
 
         return {"success": True}
     except Exception as e:
