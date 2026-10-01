@@ -393,9 +393,22 @@ def update_ledger_cell_field(req: LedgerCellFieldUpdate):
                 sn_s = str(item.get("sn_small") or '').strip()
                 req_no = str(item.get("request_no") or '').strip()
 
-                if req_no:
-                    for serial in set(filter(None, (sn_l, sn_s))):
-                        supabase.table("tat_data").update({"period_return_can": bool_val}).eq("wq", req_no).eq("sn", serial).execute()
+                if not req_no:
+                    notify_ledger_change()
+                    return {"success": True, "tatMatched": 0, "message": "台帳は保存しましたが、WQ番号がありません。"}
+                # WQを先に限定し、シリアルの前後・内部空白だけを正規化します。
+                serials = {"".join(value.split()) for value in (sn_l, sn_s) if value}
+                candidates = supabase.table("tat_data").select("id,sn,wq").eq("wq", req_no).execute().data or []
+                matched = [row for row in candidates if "".join(str(row.get("sn") or "").split()) in serials]
+                for row in matched:
+                    result = supabase.table("tat_data").update({"period_return_can": bool_val}).eq("id", row["id"]).execute()
+                    if not result.data or bool(result.data[0].get("period_return_can")) != bool_val:
+                        raise RuntimeError("TAT側の保存確認に失敗しました。")
+                notify_ledger_change()
+                return {
+                    "success": True, "tatMatched": len(matched),
+                    "message": "" if matched else "台帳は保存しましたが、TAT側に同じWQ番号・シリアルのデータが見つかりません。日報と台帳の番号を確認してください。"
+                }
 
         notify_ledger_change()
         return {"success": True}

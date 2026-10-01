@@ -614,7 +614,6 @@
             if (!currentUserSession || tatTransferBusy) { deferredChange=true; return; }
             refreshTatReturnState();
             if (document.getElementById('moduleLedger').classList.contains('active')) {
-                if (ledgerEditorFocused()) { deferredChange=true; return; }
                 if (ledgerRefreshBusy) { deferredChange=true; return; }
                 ledgerRefreshBusy=true;
                 try { await loadLedgerDataSilent(); }
@@ -648,7 +647,6 @@
                 let isRecentlyClicked = (Date.now() - lastInteractionTime < 2500);
 
                 if (document.getElementById('moduleInquiry').classList.contains('active')) loadInquiryDataSilent().catch(console.error);
-                if (isUserTyping || isRecentlyClicked) return;
                 if (document.getElementById('moduleLedger').classList.contains('active')) applyLiveDataChange();
             }, pollingTime);
         }
@@ -984,17 +982,38 @@
                 fetch(`${API_BASE}/api/ledger-data?sheet_name=${currentLedgerSheet}&mode=${currentLedgerSubView}`),
                 fetch(`${API_BASE}/api/inquiry-dashboard?userRole=${currentUserSession ? currentUserSession.role : ''}`)
             ]);
+            if (!ledgerRes.ok || !inqRes.ok) throw new Error('更新データを取得できませんでした。');
             const newLedger = await ledgerRes.json();
-            cachedInquiryData = await inqRes.json();
+            const newInquiry = await inqRes.json();
+            const inquiryChanged = JSON.stringify(cachedInquiryData?.fullStatusMap) !== JSON.stringify(newInquiry.fullStatusMap);
+            cachedInquiryData = newInquiry;
             renderInquiryCounts(cachedInquiryData);
-
-            const changed=deferredChange || JSON.stringify(cachedLedgerData)!==JSON.stringify(newLedger);
+            const changed=deferredChange || inquiryChanged || JSON.stringify(cachedLedgerData)!==JSON.stringify(newLedger);
+            if (document.getElementById('moduleLedger').classList.contains('active') && ledgerEditorFocused()) {
+                // 入力欄は再生成せず、問い合わせボタンだけを更新します。
+                updateLedgerInquiryButtons();
+                if(changed) deferredChange=true;
+                return;
+            }
             cachedLedgerData = newLedger;
-            if (document.getElementById('moduleLedger').classList.contains('active') && ledgerEditorFocused()) deferredChange = true;
-            if (changed && document.getElementById('moduleLedger').classList.contains('active') && !ledgerEditorFocused()) {
+            if (changed && document.getElementById('moduleLedger').classList.contains('active')) {
                 renderLedgerTableUI(cachedLedgerData);
                 deferredChange = false;
             }
+        }
+
+        function updateLedgerInquiryButtons() {
+            const map = cachedInquiryData?.fullStatusMap || {};
+            document.querySelectorAll('#ledgerTableBody tr').forEach((row,index) => {
+                const item=cachedLedgerData[index];
+                const button=row.querySelector('td:nth-child(2) button');
+                if(!item || !button) return;
+                const key=(rawVal(item.snLarge)||rawVal(item.snSmall)||'').replace(/\s+/g,'');
+                const status=map[key]?.status;
+                const states={PENDING_TERAMOTO:['問合せ中','#d97706'],OPEN:['問合せ中','#d97706'],ANSWERED:['回答済','#16a34a'],CLOSE:['完了済','#64748b']};
+                const value=states[status]||['問合せ','#1d4ed8'];
+                button.textContent=value[0];button.style.backgroundColor=value[1];button.style.color='#fff';
+            });
         }
 
         function renderLedgerTableUI(data) {
@@ -1111,10 +1130,22 @@ async function updateLedgerCell(rowIdx, fieldName, fieldValue) {
                 });
                 await loadLedgerData();
             } else {
-                await fetch(`${API_BASE}/api/update-ledger-cell-field`, {
+                const res = await fetch(`${API_BASE}/api/update-ledger-cell-field`, {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ sheetName: currentLedgerSheet, rowIdx, fieldName, fieldValue })
                 });
+                if(fieldName === 'periodReturnCan') {
+                    let result={};
+                    try { result=await res.json(); } catch(e) {}
+                    if(!res.ok || !result.success) {
+                        alert('保存失敗: '+(result.message||result.detail||('HTTP '+res.status)));
+                        deferredChange=true;
+                        await applyLiveDataChange();
+                        return;
+                    }
+                    alert(result.tatMatched > 0 ? '保存・TAT連携完了!' : (result.message || '台帳は保存しましたが、TAT連携件数は0件です。'));
+                    await applyLiveDataChange();
+                }
             }
         }
 
