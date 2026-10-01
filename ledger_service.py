@@ -1,5 +1,9 @@
 import re
 import threading
+import errno
+import time
+import httpx
+from supabase import create_client, ClientOptions
 import asyncio
 import json
 from functools import lru_cache
@@ -363,9 +367,54 @@ class LedgerCellFieldUpdate(BaseModel):
     fieldName: str
     fieldValue: Any
 
+def _new_checkbox_database():
+    transport = httpx.Client(
+        http1=True, http2=False,
+        timeout=httpx.Timeout(60.0, connect=15.0),
+        limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+    )
+    try:
+        return create_client(str(supabase.supabase_url), supabase.supabase_key,
+                             options=ClientOptions(httpx_client=transport)), transport
+    except Exception:
+        transport.close()
+        raise
+
+def _checkbox_temporary(error):
+    visited = set()
+    while error is not None and id(error) not in visited:
+        visited.add(id(error))
+        if isinstance(error, OSError) and error.errno in (errno.EAGAIN, errno.ETIMEDOUT, errno.ECONNRESET):
+            return True
+        if isinstance(error, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)):
+            return True
+        if isinstance(error, httpx.HTTPStatusError) and error.response.status_code in (429,502,503,504):
+            return True
+        if '[Errno 11]' in str(error) or 'Resource temporarily unavailable' in str(error) or 'StreamInputs.SEND_HEADERS' in str(error):
+            return True
+        error = error.__cause__ or error.__context__
+    return False
+
+def _checkbox_retry(operation):
+    for attempt in range(4):
+        try:
+            return operation()
+        except Exception as error:
+            if attempt == 3 or not _checkbox_temporary(error):
+                raise
+            time.sleep(min(0.5 * 2 ** attempt, 2))
+
 @router.post("/update-ledger-cell-field")
 def update_ledger_cell_field(req: LedgerCellFieldUpdate):
+    transport = None
+    ledger_saved = False
+    client = supabase
+    checkbox = req.fieldName == "periodReturnCan"
+    def execute(operation):
+        return _checkbox_retry(operation) if checkbox else operation()
     try:
+        if checkbox:
+            client, transport = _checkbox_retry(_new_checkbox_database)
         field_map = {
             "cartNo": "cart_no", "chkLabel": "chk_label", "internalInfo": "internal_info",
             "reproduceResult1_1": "reproduce_result1_1", "reproduceResult1_2": "reproduce_result1_2",
@@ -381,12 +430,15 @@ def update_ledger_cell_field(req: LedgerCellFieldUpdate):
         bool_val = bool(req.fieldValue) if req.fieldName == "periodReturnCan" else req.fieldValue
 
         # 1. ledger_data 테이블 업데이트
-        supabase.table("ledger_data").update({db_field: bool_val}).eq("id", req.rowIdx).execute()
+        result = execute(lambda: client.table("ledger_data").update({db_field: bool_val}).eq("id", req.rowIdx).execute())
+        if checkbox and (not result.data or bool(result.data[0].get("period_return_can")) != bool_val):
+            raise RuntimeError("台帳側の保存確認に失敗しました。")
+        ledger_saved = True
 
         # 2. 期間内返却可否 체크 시 수리TAT(tat_data)에도 동일 이름 컬럼으로 실시간 연동
         #    (대장 S/N = TAT 시리얼, 대장 Request No. = TAT WQ번호 기준 매칭)
         if req.fieldName == "periodReturnCan":
-            res = supabase.table("ledger_data").select("sn_large, sn_small, request_no").eq("id", req.rowIdx).execute()
+            res = execute(lambda: client.table("ledger_data").select("sn_large, sn_small, request_no").eq("id", req.rowIdx).execute())
             if res.data:
                 item = res.data[0]
                 sn_l = str(item.get("sn_large") or '').strip()
@@ -398,10 +450,10 @@ def update_ledger_cell_field(req: LedgerCellFieldUpdate):
                     return {"success": True, "tatMatched": 0, "message": "台帳は保存しましたが、WQ番号がありません。"}
                 # WQを先に限定し、シリアルの前後・内部空白だけを正規化します。
                 serials = {"".join(value.split()) for value in (sn_l, sn_s) if value}
-                candidates = supabase.table("tat_data").select("id,sn,wq").eq("wq", req_no).execute().data or []
+                candidates = execute(lambda: client.table("tat_data").select("id,sn,wq").eq("wq", req_no).execute()).data or []
                 matched = [row for row in candidates if "".join(str(row.get("sn") or "").split()) in serials]
                 for row in matched:
-                    result = supabase.table("tat_data").update({"period_return_can": bool_val}).eq("id", row["id"]).execute()
+                    result = execute(lambda: client.table("tat_data").update({"period_return_can": bool_val}).eq("id", row["id"]).execute())
                     if not result.data or bool(result.data[0].get("period_return_can")) != bool_val:
                         raise RuntimeError("TAT側の保存確認に失敗しました。")
                 notify_ledger_change()
@@ -414,4 +466,11 @@ def update_ledger_cell_field(req: LedgerCellFieldUpdate):
         return {"success": True}
     except Exception as e:
         print(f"Update Field Error: {e}")
+        if checkbox:
+            notify_ledger_change()
+            prefix = "台帳は保存済みですが、TAT連携が完了していません。" if ledger_saved else "チェック状態の保存を確認できませんでした。"
+            return {"success": False, "message": prefix + "詳細: " + str(e)}
         return {"success": False, "message": str(e)}
+    finally:
+        if transport is not None:
+            transport.close()
