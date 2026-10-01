@@ -992,6 +992,16 @@
             if (document.getElementById('moduleLedger').classList.contains('active') && ledgerEditorFocused()) {
                 // 入力欄は再生成せず、問い合わせボタンだけを更新します。
                 updateLedgerInquiryButtons();
+                document.querySelectorAll('#ledgerTableBody tr').forEach((row,index) => {
+                    const item=cachedLedgerData[index];
+                    const fresh=item ? newLedger.find(value=>value.rowIdx==item.rowIdx) : null;
+                    const select=row.querySelector('td:nth-child(3) select');
+                    if(fresh && select && select!==document.activeElement && item.status!==fresh.status) {
+                        item.status=fresh.status;
+                        select.value=fresh.status;
+                        select.style.cssText=getStatusSelectStyle(fresh.status)+' padding:4px 6px; border-radius:4px;';
+                    }
+                });
                 if(changed) deferredChange=true;
                 return;
             }
@@ -1230,6 +1240,21 @@ async function updateLedgerCell(rowIdx, fieldName, fieldValue) {
 
         function closeQaModal() { document.getElementById('qaModal').style.display = 'none'; }
 
+        async function confirmInquiryLedgerStatus(rowIdx) {
+            if (rowIdx === null || rowIdx === undefined || rowIdx === '') {
+                throw new Error('台帳の行番号が取得できません。台帳から問い合わせを開き直してください。');
+            }
+            const res = await fetch(`${API_BASE}/api/update-ledger-status`, {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({sheetName:currentLedgerSheet,rowIdx:Number(rowIdx),newStatus:'問い合わせ'})
+            });
+            let result={};
+            try { result=await res.json(); } catch(e) {}
+            if(!res.ok || !result.success) throw new Error(result.message || result.detail || ('HTTP '+res.status));
+            const target=cachedLedgerData.find(row=>row.rowIdx==rowIdx);
+            if(target) target.status='問い合わせ';
+        }
+
         async function submitReQaFormWithTarget(targetRole) {
             var snVal = document.getElementById('qaSn') ? document.getElementById('qaSn').value : '';
             var detailText = document.getElementById('qaDetail') ? document.getElementById('qaDetail').value.trim() : '';
@@ -1242,7 +1267,7 @@ async function updateLedgerCell(rowIdx, fieldName, fieldValue) {
             var userName = currentUserSession ? currentUserSession.name : '作業者';
             closeQaModal();
 
-            await fetch(`${API_BASE}/api/append-re-inquiry-sn`, {
+            const response = await fetch(`${API_BASE}/api/append-re-inquiry-sn`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     snVal: snVal,
@@ -1254,9 +1279,22 @@ async function updateLedgerCell(rowIdx, fieldName, fieldValue) {
                 })
             });
 
-            alert("再問合せ送信完了!");
+            let result={};
+            try { result=await response.json(); } catch(e) {}
+            if(!response.ok || !result.success) {
+                alert('再問合せ送信失敗: '+(result.message||result.detail||('HTTP '+response.status)));
+                return;
+            }
+            try {
+                await confirmInquiryLedgerStatus(window.currentLedgerRowIdx);
+            } catch(e) {
+                alert('再問合せは送信済みですが、台帳ステータスの更新を確認できません。再送信せず管理者に確認してください。詳細: '+e.message);
+                await loadLedgerData();
+                return;
+            }
+            alert("再問合せ送信・台帳ステータス更新完了!");
             loadInquiryData();
-            loadLedgerData();
+            await loadLedgerData();
         }
 
         async function closeInquiryByRepairMan() {
@@ -1291,13 +1329,26 @@ async function updateLedgerCell(rowIdx, fieldName, fieldValue) {
 
             closeQaModal();
 
-            await fetch(`${API_BASE}/api/submit-inquiry`, {
+            const response = await fetch(`${API_BASE}/api/submit-inquiry`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(qaData)
             });
-            alert("問い合わせ送信完了!");
+            let result={};
+            try { result=await response.json(); } catch(e) {}
+            if(!response.ok || !result.success) {
+                alert('問い合わせ送信失敗: '+(result.message||result.detail||('HTTP '+response.status)));
+                return;
+            }
+            try {
+                await confirmInquiryLedgerStatus(qaData.ledgerRowIdx);
+            } catch(e) {
+                alert('問い合わせは送信済みですが、台帳ステータスの更新を確認できません。再送信せず管理者に確認してください。詳細: '+e.message);
+                await loadLedgerData();
+                return;
+            }
+            alert("問い合わせ送信・台帳ステータス更新完了!");
             loadInquiryData();
-            loadLedgerData();
+            await loadLedgerData();
         }
 
         function renderInquiryCounts(data) {
