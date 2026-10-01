@@ -717,12 +717,22 @@
 
             let aoa = [headers];
             cachedTatRawList.forEach(i => {
+                if (Array.isArray(i.excelValues) && i.excelValues.length === 33) {
+                    const values = i.excelValues.map(v => v ?? "");
+                    const rawCan = String(values[22]).trim().toUpperCase();
+                    const originalChecked = ["O", "OK", "TRUE", "1", "YES"].includes(rawCan);
+                    if (!!i.periodReturnCan !== originalChecked) {
+                        values[22] = i.periodReturnCan ? "O" : "X";
+                    }
+                    aoa.push(values);
+                    return;
+                }
                 let canReturnStr = i.periodReturnCan ? "O" : "";
 
                 aoa.push([
                     i.wq || "", i.customer || "", i.techCategory || "", i.productCategory || "", i.sn || "",
-                    i.defectType || "Function / Performance Defect", 
-                    i.overCategory || "",            
+                    i.defectType ?? "", 
+                    i.kddiUqTat ?? "",            
                     i.kddiUqMust || "",              
                     i.reqReceiveDate || "",          
                     i.reqRepairInDate || "",         

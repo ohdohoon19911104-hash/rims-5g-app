@@ -1,4 +1,8 @@
 import re
+import errno
+import time
+import threading
+import httpx
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from typing import Any, List
@@ -96,7 +100,7 @@ TAT_EXTENDED_COLUMNS = [
     "ret_repaired_out_date", "center_tat", "center_must", "countermeasure2",
     "du_ru_type", "pba_name", "pba_recv_date", "pba_re_recv_date",
     "repair_pos", "ship_status", "remark", "pba_in", "pba_out",
-    "pba_open_close", "sub_alarm", "sub_date", "summary_use", "delay_reason"
+    "pba_open_close", "sub_alarm", "sub_date", "summary_use", "delay_reason", "repair_can"
 ]
 
 # 판별 결과 캐시 (폴링/업로드가 같은 판별을 반복하지 않도록)
@@ -112,13 +116,14 @@ def _probe_existing_columns(table_name: str, candidates: List[str]) -> set:
     for _ in range(len(candidates) + 1):
         if not remaining: break
         try:
-            supabase.table(table_name).select(",".join(remaining)).limit(1).execute()
+            _execute_with_retry(lambda: supabase.table(table_name).select(",".join(remaining)).limit(1).execute())
             existing = remaining
             break
         except Exception as e:
             msg = str(e)
             m = re.search(r"'([A-Za-z0-9_]+)' column of", msg) or re.search(r"column [A-Za-z0-9_]+\.([A-Za-z0-9_]+) does not exist", msg)
-            if not m: break
+            if not m:
+                raise
             missing = m.group(1)
             if missing in remaining: remaining.remove(missing)
     if existing:
@@ -139,16 +144,44 @@ def _chunked_list(seq: List[Any], size: int = 500):
     for i in range(0, len(seq), size):
         yield seq[i:i + size]
 
+_upload_lock = threading.Lock()
+
+def _is_temporary_error(error: Exception) -> bool:
+    current = error
+    visited = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, OSError) and current.errno in (errno.EAGAIN, errno.ETIMEDOUT, errno.ECONNRESET):
+            return True
+        if isinstance(current, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)):
+            return True
+        if isinstance(current, httpx.HTTPStatusError) and current.response.status_code in (429, 502, 503, 504):
+            return True
+        if '[Errno 11]' in str(current) or 'Resource temporarily unavailable' in str(current):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+def _execute_with_retry(operation):
+    """一時的な通信・資源エラーだけを最大5回実行します。"""
+    for attempt in range(5):
+        try:
+            return operation()
+        except Exception as error:
+            if attempt == 4 or not _is_temporary_error(error):
+                raise
+            time.sleep(min(2 ** attempt, 8))
+
 def _upsert_with_fallback(table_name: str, records: List[dict], conflict_col: str) -> None:
-    """小分けで保存し、不要な保存結果の返却を抑制します。"""
+    """同じキーで再試行するため、同一バッチの重複登録を防ぎます。"""
     unique_records = {r[conflict_col]: r for r in records}
     for batch in _chunked_list(list(unique_records.values()), 200):
-        supabase.table(table_name).upsert(
+        _execute_with_retry(lambda: supabase.table(table_name).upsert(
             batch, on_conflict=conflict_col, returning="minimal"
-        ).execute()
+        ).execute())
 
 @router.get("/tat-data")
-async def get_tat_data():
+def get_tat_data():
     try:
         all_data = []
         step = 1000
@@ -201,7 +234,7 @@ async def get_tat_data():
                 "repairPos": r.get("repair_pos", ""),
                 "shipStatus": r.get("ship_status", ""),
                 "remark": r.get("remark", ""),
-                "pbaIn": clean_date_str(r.get("pba_in")),
+                "pbaIn": r.get("pba_in", ""),
                 "pbaOut": clean_date_str(r.get("pba_out")),
                 "pbaOpenClose": r.get("pba_open_close", ""),
                 "flagMark": r.get("flag_mark", ""),
@@ -210,7 +243,17 @@ async def get_tat_data():
                 "summaryUse": r.get("summary_use", ""),
                 # 대장관리 기능과 동일한 이름(delay_reason)으로 연동되는 지연 사유
                 "delayReason": r.get("delay_reason", ""),
-                "reason": r.get("reason", "")
+                "reason": r.get("reason", ""),
+                # 画面用の計算値とは分離し、原本の33項目を返します。
+                "excelValues": [r.get(column) if r.get(column) is not None else "" for column in (
+                    "wq", "customer", "tech_category", "product_category", "sn",
+                    "defect_type", "kddi_uq_tat", "kddi_uq_must", "req_receive_date",
+                    "req_repair_in_date", "ret_repaired_out_date", "center_tat", "center_must",
+                    "status", "reproduce_detail", "fault_location", "countermeasure2",
+                    "sys_manager", "du_ru_type", "pba_name", "pba_recv_date", "pba_re_recv_date",
+                    "repair_can", "repair_pos", "ship_status", "remark", "pba_in", "pba_out",
+                    "pba_open_close", "flag_mark", "sub_alarm", "sub_date", "summary_use"
+                )]
             })
         return result
     except Exception as e:
@@ -221,6 +264,8 @@ async def get_tat_data():
 def upload_excel(file: UploadFile = File(...)):
     workbook = None
     saved_count = 0
+    if not _upload_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="別の日報アップロードを処理中です。完了後に再実行してください。")
     try:
         # 毎回最新のカラムを確認し、原本の項目を省略しません。
         _live_col_cache.pop("tat_data", None)
@@ -265,11 +310,11 @@ def upload_excel(file: UploadFile = File(...)):
                 "tech_category": safe_cell(row, 2),                                    # C
                 "product_category": safe_cell(row, 3),                                 # D
                 "sn": sn_val,                                                          # E
-                "defect_type": safe_cell(row, 5, "Function / Performance Defect"),     # F
+                "defect_type": safe_cell(row, 5),     # F
                 "kddi_uq_tat": safe_cell(row, 6),                                      # G
                 "kddi_uq_must": clean_date_str(safe_cell(row, 7)),                     # H (事業者TAT 표시 우선값)
                 "req_receive_date": clean_date_str(safe_cell(row, 8)),                 # I
-                "req_repair_in_date": repair_in,                                       # J (TAT 계산 기준 입고일)
+                "req_repair_in_date": clean_date_str(safe_cell(row, 9)),                                       # J (TAT 계산 기준 입고일)
                 "ret_repaired_out_date": clean_date_str(safe_cell(row, 10)),           # K
                 "over_category": safe_cell(row, 11),                                   # L (超過区分 표시값)
                 "center_tat": safe_cell(row, 11),                                      # L (동일 값)
@@ -284,12 +329,13 @@ def upload_excel(file: UploadFile = File(...)):
                 "pba_recv_date": clean_date_str(safe_cell(row, 20)),                   # U
                 "pba_re_recv_date": clean_date_str(safe_cell(row, 21)),                # V
                 "period_return_can": can_return_raw.upper() in ["O", "OK", "TRUE", "1", "YES"],  # W
+                "repair_can": can_return_raw,
                 "repair_pos": safe_cell(row, 23),                                      # X
                 "ship_status": safe_cell(row, 24),                                     # Y
                 "remark": safe_cell(row, 25),                                          # Z
                 # AA열(PBA_IN) -> 대장관리와 동일한 이름 delay_reason 으로 저장 (遅延理由 표시값)
                 "delay_reason": safe_cell(row, 26),                                    # AA
-                "pba_in": clean_date_str(safe_cell(row, 26)),                          # AA (원본 동일 저장용)
+                "pba_in": safe_cell(row, 26),                          # AA (원본 동일 저장용)
                 "pba_out": clean_date_str(safe_cell(row, 27)),                         # AB
                 "pba_open_close": safe_cell(row, 28),                                  # AC
                 "flag_mark": safe_cell(row, 29),                                       # AD
@@ -322,5 +368,8 @@ def upload_excel(file: UploadFile = File(...)):
             detail=f"簡易版日報の解析・保存に失敗しました。保存済み: {saved_count}件。再アップロードで続行できます。詳細: {str(e)}"
         )
     finally:
-        if workbook is not None:
-            workbook.close()
+        try:
+            if workbook is not None:
+                workbook.close()
+        finally:
+            _upload_lock.release()
