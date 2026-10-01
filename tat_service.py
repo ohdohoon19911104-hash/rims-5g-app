@@ -30,7 +30,7 @@ def _new_upload_database():
     )
     try:
         client = create_client(
-            supabase.supabase_url,
+            str(supabase.supabase_url),
             supabase.supabase_key,
             options=ClientOptions(httpx_client=transport),
         )
