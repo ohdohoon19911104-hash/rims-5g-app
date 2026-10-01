@@ -412,6 +412,7 @@
         let autoPollingInterval = null;
         let lastInteractionTime = 0;
         let cellUpdateDebounceTimer = null;
+        let tatTransferBusy = false;
 
         document.addEventListener('mousedown', () => { lastInteractionTime = Date.now(); }, true);
         document.addEventListener('mousemove', () => { lastInteractionTime = Date.now(); }, true);
@@ -444,9 +445,13 @@
             while (true) {
                 const join = url.includes('?') ? '&' : '?';
                 const res = await fetch(`${url}${join}offset=${offset}&limit=500`, {cache:'no-store'});
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                const page = await res.json();
-                if (!page || !Array.isArray(page.rows) || !Number.isFinite(page.total)) throw new Error('読み込み結果が不正です');
+                let page;
+                try { page = await res.json(); }
+                catch (e) { throw new Error('サーバーの応答を解析できません: HTTP ' + res.status); }
+                if (!res.ok) throw new Error(page.detail || ('HTTP ' + res.status));
+                if (!page || !Array.isArray(page.rows) || !Number.isFinite(page.total)) {
+                    throw new Error('保存データの応答形式が不正です。Index.htmlとtat_service.pyを同じ版に更新してください。');
+                }
                 rows.push(...page.rows);
                 offset += page.rows.length;
                 if (offset >= page.total) break;
@@ -592,6 +597,7 @@
 
             autoPollingInterval = setInterval(() => {
                 if (!currentUserSession) return;
+                if (tatTransferBusy) return;
                 refreshTatReturnState();
                 let activeEl = document.activeElement;
                 let isUserTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT');
@@ -840,22 +846,51 @@
         }
 
         async function handleFile(file) {
-            if (!file) return;
+            if (!file || tatTransferBusy) return;
+            tatTransferBusy = true;
             showProgressOverlay();
+            document.getElementById('loadingLabel').innerText = '日報の送信・保存中';
+            const jobId = (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random());
+            let saved = false, timer = null, progressBusy = false, uploading = true;
+            const poll = async () => {
+                if (progressBusy || !uploading) return;
+                progressBusy = true;
+                try {
+                    const res = await fetch(`${API_BASE}/api/tat-upload-progress?job_id=${encodeURIComponent(jobId)}`, {cache:'no-store'});
+                    if (!res.ok) return;
+                    const state = await res.json();
+                    if (uploading && state.total > 0) {
+                        setLoadProgress(Math.min(70, 70 * state.saved / state.total));
+                        document.getElementById('loadingLabel').innerText = `日報保存中: ${state.saved} / ${state.total}件`;
+                    }
+                } catch (e) { console.error('保存進捗を取得できません', e); }
+                finally { progressBusy = false; }
+            };
             try {
+                timer = setInterval(poll, 800);
                 const formData = new FormData(); formData.append("file", file);
-                const res = await fetch(`${API_BASE}/api/upload-excel`, { method: "POST", body: formData });
+                const res = await fetch(`${API_BASE}/api/upload-excel?job_id=${encodeURIComponent(jobId)}`, {method:'POST', body:formData});
                 let body = {};
                 try { body = await res.json(); } catch (e) {}
-                if (!res.ok || !body.success) {
-                    alert("同期失敗: " + (body.detail || body.message || ("HTTP " + res.status)));
-                    return;
-                }
-                alert(`同期完了! (保存件数: ${body.inserted}件)`);
-                await loadTatData();
+                if (!res.ok || !body.success) throw new Error(body.detail || body.message || ('HTTP ' + res.status));
+                saved = true;
+                uploading = false;
+                clearInterval(timer);
+                setLoadProgress(70);
+                document.getElementById('loadingLabel').innerText = '保存データを画面に反映中';
+                const rows = await fetchPagedRows(`${API_BASE}/api/tat-data`, 70, 100);
+                cachedTatRawList = rows;
+                populateTatFilterOptions(cachedTatRawList);
+                applyTatFilters();
+                await finishLoadProgress();
+                alert(`同期・画面更新完了! (保存件数: ${body.inserted}件)`);
             } catch (e) {
-                alert("同期処理中に通信エラーが発生しました。画面を再読み込みして保存状況を確認してください。");
+                hideProgressOverlay();
+                alert((saved ? 'データベースへの保存は完了しています。画面更新だけ失敗しました。再アップロードは不要です。詳細: ' : '日報の保存に失敗しました。詳細: ') + e.message);
             } finally {
+                uploading = false;
+                if (timer) clearInterval(timer);
+                tatTransferBusy = false;
                 hideProgressOverlay();
             }
         }

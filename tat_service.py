@@ -3,7 +3,7 @@ import errno
 import time
 import threading
 import httpx
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from pydantic import BaseModel
 from typing import Any, List
 import pandas as pd
@@ -11,6 +11,33 @@ from openpyxl import load_workbook
 from functools import lru_cache
 from datetime import datetime, timedelta
 from database import supabase
+from supabase import create_client, ClientOptions
+from contextvars import ContextVar
+
+# 日報アップロードの通信を自動更新の共有接続から分離します。
+_upload_database = ContextVar("tat_upload_database", default=None)
+
+def _tat_database():
+    client = _upload_database.get()
+    return client if client is not None else supabase
+
+def _new_upload_database():
+    transport = httpx.Client(
+        http1=True,
+        http2=False,
+        timeout=httpx.Timeout(120.0, connect=30.0),
+        limits=httpx.Limits(max_connections=2, max_keepalive_connections=1),
+    )
+    try:
+        client = create_client(
+            supabase.supabase_url,
+            supabase.supabase_key,
+            options=ClientOptions(httpx_client=transport),
+        )
+        return client, transport
+    except Exception:
+        transport.close()
+        raise
 
 router = APIRouter(prefix="/api", tags=["TAT Service"])
 
@@ -116,7 +143,7 @@ def _probe_existing_columns(table_name: str, candidates: List[str]) -> set:
     for _ in range(len(candidates) + 1):
         if not remaining: break
         try:
-            _execute_with_retry(lambda: supabase.table(table_name).select(",".join(remaining)).limit(1).execute())
+            _execute_with_retry(lambda: _tat_database().table(table_name).select(",".join(remaining)).limit(1).execute())
             existing = remaining
             break
         except Exception as e:
@@ -145,6 +172,28 @@ def _chunked_list(seq: List[Any], size: int = 500):
         yield seq[i:i + size]
 
 _upload_lock = threading.Lock()
+_upload_progress = {}
+_progress_lock = threading.Lock()
+
+def _set_upload_progress(job_id, **values):
+    if not job_id:
+        return
+    with _progress_lock:
+        now = time.monotonic()
+        for key in list(_upload_progress):
+            if now - _upload_progress[key].get("updated", now) > 3600:
+                del _upload_progress[key]
+        state = _upload_progress.setdefault(job_id, {})
+        state.update(values)
+        state["updated"] = now
+
+@router.get("/tat-upload-progress")
+def get_upload_progress(job_id: str = Query(..., min_length=1, max_length=100)):
+    with _progress_lock:
+        state = dict(_upload_progress.get(job_id, {}))
+    state.pop("updated", None)
+    return state or {"phase": "waiting", "saved": 0, "total": 0}
+
 
 def _is_temporary_error(error: Exception) -> bool:
     current = error
@@ -157,7 +206,8 @@ def _is_temporary_error(error: Exception) -> bool:
             return True
         if isinstance(current, httpx.HTTPStatusError) and current.response.status_code in (429, 502, 503, 504):
             return True
-        if '[Errno 11]' in str(current) or 'Resource temporarily unavailable' in str(current):
+        if ('[Errno 11]' in str(current) or 'Resource temporarily unavailable' in str(current)
+                or 'StreamInputs.SEND_HEADERS' in str(current)) :
             return True
         current = current.__cause__ or current.__context__
     return False
@@ -176,13 +226,17 @@ def _upsert_with_fallback(table_name: str, records: List[dict], conflict_col: st
     """同じキーで再試行するため、同一バッチの重複登録を防ぎます。"""
     unique_records = {r[conflict_col]: r for r in records}
     for batch in _chunked_list(list(unique_records.values()), 200):
-        _execute_with_retry(lambda: supabase.table(table_name).upsert(
+        _execute_with_retry(lambda: _tat_database().table(table_name).upsert(
             batch, on_conflict=conflict_col, returning="minimal"
         ).execute())
 
 @router.get("/tat-data")
 def get_tat_data(offset: int = 0, limit: int = 0):
+    token = None
+    transport = None
     try:
+        client, transport = _new_upload_database()
+        token = _upload_database.set(client)
         all_data = []
         step = 1000
         start = max(offset, 0) if limit else 0
@@ -190,7 +244,7 @@ def get_tat_data(offset: int = 0, limit: int = 0):
         if limit:
             step = min(max(limit, 1), 1000)
         while True:
-            res = supabase.table("tat_data").select("*", count="exact" if limit else None).order("id", desc=False).range(start, start + step - 1).execute()
+            res = _execute_with_retry(lambda: _tat_database().table("tat_data").select("*", count="exact" if limit else None).order("id", desc=False).range(start, start + step - 1).execute())
             if limit:
                 total = res.count
             rows = res.data or []
@@ -262,16 +316,27 @@ def get_tat_data(offset: int = 0, limit: int = 0):
             })
         return {"rows": result, "total": total} if limit else result
     except Exception as e:
-        print(f"Error fetching tat data: {e}")
-        return []
+        raise HTTPException(status_code=503, detail=f"保存データの読み込みに失敗しました: {str(e)}")
+    finally:
+        if token is not None:
+            _upload_database.reset(token)
+        if transport is not None:
+            transport.close()
 
 @router.post("/upload-excel")
-def upload_excel(file: UploadFile = File(...)):
+def upload_excel(file: UploadFile = File(...), job_id: str = ""):
     workbook = None
+    job_id = job_id[:100]
+    expected_rows = 0
+    database_token = None
+    upload_transport = None
     saved_count = 0
     if not _upload_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="別の日報アップロードを処理中です。完了後に再実行してください。")
     try:
+        _set_upload_progress(job_id, phase="parsing", saved=0, total=0)
+        upload_client, upload_transport = _new_upload_database()
+        database_token = _upload_database.set(upload_client)
         # 毎回最新のカラムを確認し、原本の項目を省略しません。
         _live_col_cache.pop("tat_data", None)
         required = (set(TAT_CORE_COLUMNS) - {"reason"}) | set(TAT_EXTENDED_COLUMNS)
@@ -286,11 +351,14 @@ def upload_excel(file: UploadFile = File(...)):
         if (file.filename or "").lower().endswith(".xls"):
             dataframe = pd.read_excel(file.file, header=None)
             rows = dataframe.itertuples(index=False, name=None)
+            expected_rows = max(len(dataframe) - 1, 0)
         else:
             workbook = load_workbook(file.file, read_only=True, data_only=True)
             sheet = workbook.worksheets[0]
             rows = sheet.iter_rows(values_only=True)
+            expected_rows = max((sheet.max_row or 1) - 1, 0)
 
+        _set_upload_progress(job_id, phase="saving", saved=0, total=expected_rows)
         header_found = False
         records = []
         for row in rows:
@@ -355,6 +423,7 @@ def upload_excel(file: UploadFile = File(...)):
             if len(records) >= 200:
                 _upsert_with_fallback("tat_data", records, "wq")
                 saved_count += len(records)
+                _set_upload_progress(job_id, phase="saving", saved=saved_count, total=expected_rows)
                 records.clear()
 
         if not header_found:
@@ -364,10 +433,13 @@ def upload_excel(file: UploadFile = File(...)):
             saved_count += len(records)
         if saved_count == 0:
             raise HTTPException(status_code=400, detail="保存対象のデータがありません。")
+        _set_upload_progress(job_id, phase="saved", saved=saved_count, total=saved_count)
         return {"inserted": saved_count, "ignored": 0, "success": True}
     except HTTPException:
+        _set_upload_progress(job_id, phase="failed", saved=saved_count, total=expected_rows)
         raise
     except Exception as e:
+        _set_upload_progress(job_id, phase="failed", saved=saved_count, total=expected_rows)
         raise HTTPException(
             status_code=500,
             detail=f"簡易版日報の解析・保存に失敗しました。保存済み: {saved_count}件。再アップロードで続行できます。詳細: {str(e)}"
@@ -377,7 +449,13 @@ def upload_excel(file: UploadFile = File(...)):
             if workbook is not None:
                 workbook.close()
         finally:
-            _upload_lock.release()
+            try:
+                if database_token is not None:
+                    _upload_database.reset(database_token)
+                if upload_transport is not None:
+                    upload_transport.close()
+            finally:
+                _upload_lock.release()
 
 
 @router.get("/tat-return-state")
@@ -385,7 +463,7 @@ def get_tat_return_state():
     result = []
     start = 0
     while True:
-        response = _execute_with_retry(lambda: supabase.table("tat_data").select("id,period_return_can").order("id").range(start, start + 999).execute())
+        response = _execute_with_retry(lambda: _tat_database().table("tat_data").select("id,period_return_can").order("id").range(start, start + 999).execute())
         rows = response.data or []
         result.extend(rows)
         if len(rows) < 1000:
