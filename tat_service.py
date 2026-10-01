@@ -80,10 +80,8 @@ async def get_tat_data():
         for r in all_data:
             repair_in = clean_date_str(r.get("req_repair_in_date") or r.get("req_receive_date"))
             cust = r.get("customer", "")
-            
-            # DB 저장값 우선 조회 후 없을 시 자동 계산
-            carrier_dl = r.get("carrier_deadline") or calculate_carrier_deadline(repair_in, cust)
-            tat13_dl = r.get("tat13_deadline") or calculate_13_working_days_deadline(repair_in)
+            carrier_dl = r.get("carrier_deadline") or r.get("kddi_uq_must") or calculate_carrier_deadline(repair_in, cust)
+            tat13_dl = r.get("tat13_deadline") or r.get("center_must") or calculate_13_working_days_deadline(repair_in)
             
             p_can = r.get("period_return_can")
             p_can_legacy = r.get("repair_can")
@@ -149,11 +147,9 @@ async def upload_excel(file: UploadFile = File(...)):
             req_recv_date = clean_date_str(safe_cell(row, 8))
             req_repair_in_date = clean_date_str(safe_cell(row, 9)) or req_recv_date
             
-            # 입고일 기준 자동 계산 로직 적용
             calc_carrier_dl = calculate_carrier_deadline(req_repair_in_date, cust)
             calc_tat13_dl = calculate_13_working_days_deadline(req_repair_in_date)
 
-            # 엑셀 원본에 이미 계산되어 넘어온 값이 있다면 해당 값 사용, 없으면 직접 계산된 값 사용
             excel_carrier_dl = safe_cell(row, 7)
             excel_tat13_dl = safe_cell(row, 12)
             
@@ -172,8 +168,8 @@ async def upload_excel(file: UploadFile = File(...)):
                 "defect_type": safe_cell(row, 5, "Function / Performance Defect"),
                 "over_category": safe_cell(row, 6),
                 "status": safe_cell(row, 13),
-                "carrier_deadline": final_carrier_dl,  # 자동 계산 또는 정제된 사업자 TAT
-                "tat13_deadline": final_tat13_dl,      # 자동 계산 또는 정제된 13일 TAT
+                "carrier_deadline": final_carrier_dl,
+                "tat13_deadline": final_tat13_dl,
                 "period_return_can": can_return_bool,
                 "reason": safe_cell(row, 25),
                 "reproduce_detail": safe_cell(row, 14),
@@ -191,4 +187,4 @@ async def upload_excel(file: UploadFile = File(...)):
         return {"inserted": len(records), "ignored": 0, "success": True}
     except Exception as e:
         print(f"Excel Upload Error: {e}")
-        raise HTTPException(status_code=500, detail=f"TAT 엑셀 파일 해석/DB 저장 오류: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"TAT 엑セル 파일 해석/DB 저장 오류: {str(e)}")

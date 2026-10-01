@@ -115,7 +115,7 @@
 </head>
 <body>
 
-    <!-- 부드럽게 멈춤 없이 상승하는 로딩바 오バーレイ -->
+    <!-- 부드럽게 멈춤 없이 상승하는 로ディング바 오バーレイ -->
     <div id="loadingOverlay" class="loading-overlay">
         <div class="progress-box">
             <div id="progressTitle" class="progress-title">データ処理中...</div>
@@ -436,7 +436,7 @@
         const reproduceOptions1 = ["", "A", "B", "C", "D", "A-B", "A-D", "C-D", "B-C", "A,C", "B,D", "A-B,D", "A-C", "A,D", "B-D"];
         const reproduceOptions2 = ["", "LOW GAIN", "NTF", "OVER POWER,VSWR FAIL", "POWER FAIL", "RSSI FAIL", "CPRI FAIL", "VSWR FAIL", "CLOCK FAIL", "BURNT", "CAL FAIL", "OVER POWER"];
 
-        /* 멈춤 없이 100%까지 꾸준하게 상승하는 로딩바 */
+        /* 멈춤 없이 100%까지 꾸준하게 상승하는 프로グレス바 */
         function showProgressOverlay(title = "データ処理中...") {
             document.getElementById('progressTitle').innerText = title;
             document.getElementById('progressBarFill').style.width = '0%';
@@ -1428,7 +1428,7 @@
         }
 
         function openCreateUserModal() { document.getElementById('createUserModal').style.display = 'flex'; }
-        function closeCreateUserModal() { document.getElementById('createUserModal').style.display = 'none'; }
+        function closeCreateUserModal() { document.getElementById('closeCreateUserModal').style.display = 'none'; }
 
         async function submitCreateUser() {
             const newUserId = document.getElementById('newUserId').value;
