@@ -1,6 +1,7 @@
+import re
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
-from typing import Any
+from typing import Any, List
 import pandas as pd
 from datetime import datetime, timedelta
 from database import supabase
@@ -62,11 +63,85 @@ def classify_target_sheet(customer: str, tech_cat: str, prod_cat: str, cat_name:
     if "KDDI" in cust: return "KDDI RRH"
     return "BBU"
 
+# =========================================================================
+# Supabase 実テーブルのカラム判定
+# (実在しないカラムを送信すると PGRST204 エラーでアップロード全体が
+#  失敗するため、実在するカラムだけを抽出して保存する)
+# =========================================================================
+
+# 実テーブルに確実に存在するコアカラム(2026-10-01 検証済み)
+LEDGER_CORE_COLUMNS = [
+    "request_no", "sheet_name", "status", "sn_large", "sn_small", "status2",
+    "alarm_name", "category_name", "customer", "tech_category", "model_code",
+    "part_code", "part_desc", "symptom", "re_defect", "no_of_request",
+    "difference_day", "receive_date", "received_date", "is_outbound"
+]
+
+# 将来テーブルに追加カラム(ADD COLUMN)を実施した場合に自動で保存対象へ含める拡張カラム
+LEDGER_EXTENDED_COLUMNS = ["period_return_can"]
+
+def _probe_existing_columns(table_name: str, candidates: List[str]) -> set:
+    """候補カラムの中で実テーブルに存在するものだけを抽出して返す"""
+    remaining = list(candidates)
+    existing: List[str] = []
+    for _ in range(len(candidates) + 1):
+        if not remaining: break
+        try:
+            supabase.table(table_name).select(",".join(remaining)).limit(1).execute()
+            existing = remaining
+            break
+        except Exception as e:
+            msg = str(e)
+            m = re.search(r"'([A-Za-z0-9_]+)' column of", msg) or re.search(r"column [A-Za-z0-9_]+\.([A-Za-z0-9_]+) does not exist", msg)
+            if not m: break
+            missing = m.group(1)
+            if missing in remaining: remaining.remove(missing)
+    return set(existing)
+
+def _filter_records_by_live_columns(records: List[dict], table_name: str, core_columns: List[str], extended_columns: List[str]) -> List[dict]:
+    """実在カラムのみを含むようにレコードを絞り込む(判定できない場合はコアカラムのみ)"""
+    live = _probe_existing_columns(table_name, core_columns + extended_columns)
+    allowed = live if live else set(core_columns)
+    if not live:
+        print(f"[Ledger upload] column check failed -> save with core columns only")
+    else:
+        print(f"[Ledger upload] saving {len(allowed)} existing columns / skipped {len(set(core_columns + extended_columns) - allowed)} not-defined columns")
+    return [{k: rec[k] for k in rec if k in allowed} for rec in records]
+
+def _chunked_list(seq: List[Any], size: int = 500):
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+def _upsert_with_fallback(table_name: str, records: List[dict], conflict_col: str) -> None:
+    """一括 upsert 失敗時(on_conflict 対象列にユニーク制約がない等)は
+    既存キーの照合による手動 upsert に切り替えて保存する"""
+    try:
+        supabase.table(table_name).upsert(records, on_conflict=conflict_col).execute()
+        return
+    except Exception as e:
+        print(f"[Ledger upload] bulk upsert failed -> manual sync: {e}")
+
+    keys = [str(r[conflict_col]) for r in records if r.get(conflict_col) not in (None, "")]
+    existing_keys = set()
+    for chunk in _chunked_list(keys):
+        if not chunk: continue
+        res = supabase.table(table_name).select(conflict_col).in_(conflict_col, chunk).execute()
+        for r in (res.data or []):
+            existing_keys.add(str(r.get(conflict_col)))
+
+    inserts = [r for r in records if str(r.get(conflict_col)) not in existing_keys]
+    updates = [r for r in records if str(r.get(conflict_col)) in existing_keys]
+
+    if inserts:
+        supabase.table(table_name).insert(inserts).execute()
+    for r in updates:
+        supabase.table(table_name).update(r).eq(conflict_col, r[conflict_col]).execute()
+
 @router.get("/ledger-data")
 async def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is_outbound: bool = False):
     try:
         target_outbound = True if mode == "completed" or is_outbound else False
-        
+
         all_data = []
         step = 1000
         start = 0
@@ -82,7 +157,7 @@ async def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is
         for i, r in enumerate(all_data):
             rec_date = clean_date_str(r.get("receive_date"))
             calc_tat = calculate_working_days(rec_date)
-            
+
             p_can = r.get("period_return_can")
             is_checked = True if p_can in [True, "true", "True", 1, "1", "OK", "ok"] else False
 
@@ -119,7 +194,7 @@ async def upload_ledger_excel(file: UploadFile = File(...)):
             if first_cell == "NO" or first_cell.startswith("修理"):
                 header_idx = idx
                 break
-                
+
         data_df = df.iloc[header_idx + 1:].copy()
         records = []
         for idx, row in data_df.iterrows():
@@ -131,7 +206,7 @@ async def upload_ledger_excel(file: UploadFile = File(...)):
             prod_s = safe_cell(row, 29) or safe_cell(row, 5)
             cat_name = safe_cell(row, 27) or safe_cell(row, 28) or prod_s
             model_code = safe_cell(row, 30)
-            
+
             target_sheet = classify_target_sheet(cust, tech, prod_s, cat_name, model_code)
             repair_in_dt = clean_date_str(safe_cell(row, 7)) or clean_date_str(safe_cell(row, 110))
             st2 = safe_cell(row, 3, "REQ] REPAIR IN")
@@ -165,7 +240,11 @@ async def upload_ledger_excel(file: UploadFile = File(...)):
             })
 
         if records:
-            supabase.table("ledger_data").upsert(records, on_conflict="request_no").execute()
+            # 実テーブルに存在しないカラムは自動で除外してから保存する
+            filtered = _filter_records_by_live_columns(records, "ledger_data", LEDGER_CORE_COLUMNS, LEDGER_EXTENDED_COLUMNS)
+            filtered = [r for r in filtered if r.get("request_no")]
+            if filtered:
+                _upsert_with_fallback("ledger_data", filtered, "request_no")
 
         return {"inserted": len(records), "ignored": 0, "success": True}
     except Exception as e:
@@ -208,22 +287,26 @@ async def update_ledger_cell_field(req: LedgerCellFieldUpdate):
         db_field = field_map.get(req.fieldName, req.fieldName)
         bool_val = bool(req.fieldValue) if req.fieldName == "periodReturnCan" else req.fieldValue
 
+        # 1. ledger_data 테이블 업데이트 (period_return_can)
         supabase.table("ledger_data").update({db_field: bool_val}).eq("id", req.rowIdx).execute()
 
+        # 2. tat_data 테이블 연동 업데이트 (기존 컬럼 repair_can 활용: 체크 시 "OK", 해제 시 "")
         if req.fieldName == "periodReturnCan":
-            res = supabase.table("ledger_data").select("request_no, sn_large, sn_small").eq("id", req.rowIdx).execute()
+            repair_can_str = "OK" if bool_val else ""
+            res = supabase.table("ledger_data").select("sn_large, sn_small, request_no").eq("id", req.rowIdx).execute()
             if res.data:
                 item = res.data[0]
-                req_no = str(item.get("request_no") or '').strip()
                 sn_l = str(item.get("sn_large") or '').strip()
                 sn_s = str(item.get("sn_small") or '').strip()
-                
+                req_no = str(item.get("request_no") or '').strip()
+
+                # tat_data의 기존 컬럼 repair_can 업데이트
+                if sn_l:
+                    supabase.table("tat_data").update({"repair_can": repair_can_str}).eq("sn", sn_l).execute()
+                if sn_s and sn_s != sn_l:
+                    supabase.table("tat_data").update({"repair_can": repair_can_str}).eq("sn", sn_s).execute()
                 if req_no:
-                    supabase.table("tat_data").update({"period_return_can": bool_val}).eq("wq", req_no).execute()
-                elif sn_l:
-                    supabase.table("tat_data").update({"period_return_can": bool_val}).eq("sn", sn_l).execute()
-                elif sn_s:
-                    supabase.table("tat_data").update({"period_return_can": bool_val}).eq("sn", sn_s).execute()
+                    supabase.table("tat_data").update({"repair_can": repair_can_str}).eq("wq", req_no).execute()
 
         return {"success": True}
     except Exception as e:
