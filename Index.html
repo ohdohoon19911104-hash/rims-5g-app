@@ -686,7 +686,7 @@
                     <td>${i.status}</td>
                     <td><b>${cleanVal(i.kddiUqMust || i.carrierDeadline)}</b></td>
                     <td><b>${cleanVal(i.centerMust || i.tat13Deadline)}</b></td>
-                    <td>${i.reason || ''}</td>
+                    <td>${i.delayReason || ''}</td>
                 </tr>
             `).join('');
         }
@@ -709,14 +709,14 @@
                 "Defect Type", "KDDI,UQ\nTAT(수정)", "KDDI,UQ\nMUST 수리", "REQ] RECEIVE Date", "REQ] REPAIR IN Date",
                 "RET] REPAIRED OUT Date", "修理センター\nTAT(수정)", "修理センター\nMUST 수리", "Status", "Reproduce Detail",
                 "Fault Location", "대책2", " システム担当者", "DU/RU 구분\n DU/RU区分", "PBA 名\u3000\nPBA名",
-                "PBA 받은날짜\nPBA受領日", "PBA다시 결産日\nPBA再受領日", "수리가능여部\n修理可否\u3000(O, X)", "수리위치\n修理箇所", "함体出荷状況\n修理出荷状況",
+                "PBA 받은날짜\nPBA受領日", "PBA다시 결産日\nPBA再受領日", "수리가능여部\n修理可否\u3000(O, X)", "수리위치\n修理箇所", "함체출고여부\n修理出荷状況",
                 "備考", "PBA_IN", "PBA_OUT", "PBA_OPENorCLOSE", "フラグ\n★：修理不可他\n□：代替品出荷\n※：reparied out\n●：TAT31日超過分に印\nDOCOMOは16日超過分に印\n",
                 "代替品\nアラーム", "代替品\n検討打診日", "集計用"
             ];
 
             let aoa = [headers];
             cachedTatRawList.forEach(i => {
-                let canReturnStr = i.periodReturnCan ? "OK" : "";
+                let canReturnStr = i.periodReturnCan ? "O" : "";
 
                 aoa.push([
                     i.wq || "", i.customer || "", i.techCategory || "", i.productCategory || "", i.sn || "",
@@ -757,7 +757,7 @@
 
                 ws[address].s = {
                     fill: { fgColor: { rgb: bgClr } },
-                    font: { bold: true, size: 10, name: "Arial" },
+                    font: { bold: true, size: 11, name: "Arial" },
                     alignment: { wrapText: true, vertical: "center", horizontal: "center" }
                 };
             }

@@ -64,12 +64,12 @@ def classify_target_sheet(customer: str, tech_cat: str, prod_cat: str, cat_name:
     return "BBU"
 
 # =========================================================================
-# Supabase 実テーブルのカラム判定
-# (実在しないカラムを送信すると PGRST204 エラーでアップロード全体が
-#  失敗するため、実在するカラムだけを抽出して保存する)
+# Supabase 실제 테이블의 컬럼 판별 로직
+# (존재하지 않는 컬럼을 보내면 PGRST204 오류로 업로드 전체가 실패하기 때문에
+#  실제 존재하는 컬럼만 자동 판별해서 저장한다)
 # =========================================================================
 
-# 実テーブルに確実に存在するコアカラム(2026-10-01 検証済み)
+# 확정판 Rawdata 구조 기준 기본 컬럼(2026-10-01 確定版 파일과 대조 검증 완료)
 LEDGER_CORE_COLUMNS = [
     "request_no", "sheet_name", "status", "sn_large", "sn_small", "status2",
     "alarm_name", "category_name", "customer", "tech_category", "model_code",
@@ -77,11 +77,18 @@ LEDGER_CORE_COLUMNS = [
     "difference_day", "receive_date", "received_date", "is_outbound"
 ]
 
-# 将来テーブルに追加カラム(ADD COLUMN)を実施した場合に自動で保存対象へ含める拡張カラム
-LEDGER_EXTENDED_COLUMNS = []
+# add_missing_columns.sql 실행 후 자동으로 저장/연동 대상에 포함되는 컬럼
+# (수리TAT 기능과 동일한 이름으로 연동: period_return_can, delay_reason)
+LEDGER_EXTENDED_COLUMNS = ["period_return_can"]
+
+# 판별 결과 캐시 (폴링/업로드가 같은 판별을 반복하지 않도록)
+_live_col_cache: dict = {}
 
 def _probe_existing_columns(table_name: str, candidates: List[str]) -> set:
-    """候補カラムの中で実テーブルに存在するものだけを抽出して返す"""
+    """후보 컬럼 중 실제 테이블에 존재하는 것만 추려서 반환 (결과 캐시)"""
+    cached = _live_col_cache.get(table_name)
+    if cached is not None:
+        return cached
     remaining = list(candidates)
     existing: List[str] = []
     for _ in range(len(candidates) + 1):
@@ -96,10 +103,12 @@ def _probe_existing_columns(table_name: str, candidates: List[str]) -> set:
             if not m: break
             missing = m.group(1)
             if missing in remaining: remaining.remove(missing)
+    if existing:
+        _live_col_cache[table_name] = set(existing)
     return set(existing)
 
 def _filter_records_by_live_columns(records: List[dict], table_name: str, core_columns: List[str], extended_columns: List[str]) -> List[dict]:
-    """実在カラムのみを含むようにレコードを絞り込む(判定できない場合はコアカラムのみ)"""
+    """존재하는 컬럼만 포함하도록 레코드를 정제 (판별 실패 시 기본 컬럼만)"""
     live = _probe_existing_columns(table_name, core_columns + extended_columns)
     allowed = live if live else set(core_columns)
     if not live:
@@ -113,8 +122,8 @@ def _chunked_list(seq: List[Any], size: int = 500):
         yield seq[i:i + size]
 
 def _upsert_with_fallback(table_name: str, records: List[dict], conflict_col: str) -> None:
-    """一括 upsert 失敗時(on_conflict 対象列にユニーク制約がない等)は
-    既存キーの照合による手動 upsert に切り替えて保存する"""
+    """일괄 upsert 실행 실패 시(on_conflict 대상 컬럼에 유니크 제약이 없는 경우 등)
+    기존 키 조회 방식의 수동 upsert로 전환해서 저장한다"""
     try:
         supabase.table(table_name).upsert(records, on_conflict=conflict_col).execute()
         return
@@ -145,8 +154,14 @@ async def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is
         all_data = []
         step = 1000
         start = 0
+        # is_outbound 컬럼이 테이블에 없는 경우(수동 DB 작업 등)에도
+        # 조회 오류로 화면 전체가 깨지지 않도록 존재 여부를 확인 후 필터링한다
+        live_cols = _probe_existing_columns("ledger_data", LEDGER_CORE_COLUMNS + LEDGER_EXTENDED_COLUMNS)
         while True:
-            res = supabase.table("ledger_data").select("*").eq("sheet_name", sheet_name).eq("is_outbound", target_outbound).order("id", desc=False).range(start, start + step - 1).execute()
+            q = supabase.table("ledger_data").select("*").eq("sheet_name", sheet_name)
+            if "is_outbound" in live_cols:
+                q = q.eq("is_outbound", target_outbound)
+            res = q.order("id", desc=False).range(start, start + step - 1).execute()
             rows = res.data or []
             all_data.extend(rows)
             if len(rows) < step:
@@ -157,6 +172,10 @@ async def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is
         for i, r in enumerate(all_data):
             rec_date = clean_date_str(r.get("receive_date"))
             calc_tat = calculate_working_days(rec_date)
+
+            # 수리TAT 기능과 동일한 이름(period_return_can)으로 연동되는 체크값
+            p_can = r.get("period_return_can")
+            is_checked = True if p_can in [True, "true", "True", 1, "1", "OK", "ok"] else False
 
             result.append({
                 "rowIdx": r["id"], "no": i + 1, "status": r.get("status", "再現試験待機"),
@@ -174,6 +193,9 @@ async def get_ledger_data(sheet_name: str = "BBU", mode: str = "in_progress", is
                 "modelCode": r.get("model_code", ""), "partCode": r.get("part_code", ""), "partDesc": r.get("part_desc", ""),
                 "symptom": r.get("symptom", ""), "reDefect": r.get("re_defect", ""), "noOfRequest": r.get("no_of_request", ""),
                 "differenceDay": r.get("difference_day", ""), "receivedDate": clean_date_str(r.get("received_date")), 
+                # 대장관리의 期間内返却可否 (수리TAT의 period_return_can과 동일 이름으로 연동)
+                "periodReturnCan": is_checked,
+                # 대장관리의 遅延理由 (수리TAT의 delay_reason과 동일 이름으로 연동)
                 "delayReason": r.get("delay_reason", "")
             })
         return result
@@ -232,11 +254,13 @@ async def upload_ledger_excel(file: UploadFile = File(...)):
                 "difference_day": safe_cell(row, 50, "-"), 
                 "receive_date": repair_in_dt,
                 "received_date": clean_date_str(safe_cell(row, 56)), 
+                # 수리TAT 기능과 동일한 이름(period_return_can)으로 연동
+                "period_return_can": False,
                 "is_outbound": False
             })
 
         if records:
-            # 実テーブルに存在しないカラムは自動で除外してから保存する
+            # 존재하지 않는 컬럼은 자동으로 제외한 뒤 저장
             filtered = _filter_records_by_live_columns(records, "ledger_data", LEDGER_CORE_COLUMNS, LEDGER_EXTENDED_COLUMNS)
             filtered = [r for r in filtered if r.get("request_no")]
             if filtered:
@@ -277,12 +301,31 @@ async def update_ledger_cell_field(req: LedgerCellFieldUpdate):
             "repairDetail": "repair_detail", "manager": "manager", "delayReason": "delay_reason",
             "reproduceResult": "reproduce_result", "chkInboundLog": "chk_inbound_log",
             "chkFmHisLog": "chk_fm_his_log", "chkCal": "chk_cal", "chkCharacteristic": "chk_characteristic",
-            "chkNtfLog": "chk_ntf_log", "chkOutboundLog": "chk_outbound_log", "chkLock": "chk_lock"
+            "chkNtfLog": "chk_ntf_log", "chkOutboundLog": "chk_outbound_log", "chkLock": "chk_lock",
+            "periodReturnCan": "period_return_can"
         }
         db_field = field_map.get(req.fieldName, req.fieldName)
+        bool_val = bool(req.fieldValue) if req.fieldName == "periodReturnCan" else req.fieldValue
 
         # 1. ledger_data 테이블 업데이트
-        supabase.table("ledger_data").update({db_field: req.fieldValue}).eq("id", req.rowIdx).execute()
+        supabase.table("ledger_data").update({db_field: bool_val}).eq("id", req.rowIdx).execute()
+
+        # 2. 期間内返却可否 체크 시 수리TAT(tat_data)에도 동일 이름 컬럼으로 실시간 연동
+        #    (대장 S/N = TAT 시리얼, 대장 Request No. = TAT WQ번호 기준 매칭)
+        if req.fieldName == "periodReturnCan":
+            res = supabase.table("ledger_data").select("sn_large, sn_small, request_no").eq("id", req.rowIdx).execute()
+            if res.data:
+                item = res.data[0]
+                sn_l = str(item.get("sn_large") or '').strip()
+                sn_s = str(item.get("sn_small") or '').strip()
+                req_no = str(item.get("request_no") or '').strip()
+
+                if sn_l:
+                    supabase.table("tat_data").update({"period_return_can": bool_val}).eq("sn", sn_l).execute()
+                if sn_s and sn_s != sn_l:
+                    supabase.table("tat_data").update({"period_return_can": bool_val}).eq("sn", sn_s).execute()
+                if req_no:
+                    supabase.table("tat_data").update({"period_return_can": bool_val}).eq("wq", req_no).execute()
 
         return {"success": True}
     except Exception as e:

@@ -33,6 +33,11 @@ def safe_cell(row: Any, idx: int, default: str = "") -> str:
     except: pass
     return default
 
+# =====================================================================
+# 事業者TAT(KDDI,UQ MUST 수리) 계산
+# REQ] REPAIR IN Date(入庫日) 기준으로 주말/일본공휴일을 "포함해서"
+# 달력 일수로 카운트 한다 (UQ 90일 / KDDI 60일 / NEC 45일 / DOCOMO 30일)
+# =====================================================================
 def calculate_carrier_deadline(repair_in_str: str, customer: str) -> str:
     clean_s = clean_date_str(repair_in_str)
     if not clean_s: return '-'
@@ -44,11 +49,14 @@ def calculate_carrier_deadline(repair_in_str: str, customer: str) -> str:
         elif "KDDI" in cust: add_days = 60
         elif "NEC" in cust: add_days = 45
         elif "DOCOMO" in cust: add_days = 30
-
-        target_dt = dt + timedelta(days=add_days)
-        return target_dt.strftime("%Y-%m-%d")
+        return (dt + timedelta(days=add_days)).strftime("%Y-%m-%d")
     except: return '-'
 
+# =====================================================================
+# 13日TAT(修理センター MUST 수리) 계산
+# REQ] REPAIR IN Date(入庫日) 기준으로 주말/일본공휴일을 "포함하지 않고"
+# 영업일 기준으로 13일을 카운트 한다
+# =====================================================================
 def calculate_13_working_days_deadline(repair_in_str: str) -> str:
     clean_s = clean_date_str(repair_in_str)
     if not clean_s: return '-'
@@ -64,29 +72,37 @@ def calculate_13_working_days_deadline(repair_in_str: str) -> str:
     except: return '-'
 
 # =========================================================================
-# Supabase 実テーブルのカラム判定
-# (実在しないカラムを送信すると PGRST204 エラーでアップロード全体が
-#  失敗するため、実在するカラムだけを抽出して保存する)
+# Supabase 실제 테이블의 컬럼 판별 로직
+# (존재하지 않는 컬럼을 보내면 PGRST204 오류로 업로드 전체가 실패하기 때문에
+#  실제 존재하는 컬럼만 자동 판별해서 저장한다. SQL로 컬럼을 추가하면
+#  업로드 시점에 자동으로 해당 컬럼들의 저장이 시작된다)
 # =========================================================================
 
-# 実テーブルに確実に存在するコアカラム(2026-10-01 検証済み)
+# 현재 DB 테이블에 존재하는 기본 컬럼(2026-10-01 검증 완료)
 TAT_CORE_COLUMNS = [
     "wq", "customer", "tech_category", "product_category", "sn",
     "defect_type", "over_category", "status",
-    "carrier_deadline", "tat13_deadline",
+    "carrier_deadline", "tat13_deadline", "period_return_can",
     "reason", "reproduce_detail", "fault_location", "sys_manager", "flag_mark"
 ]
 
-# 将来テーブルに追加カラム(ADD COLUMN)を実施した場合に自動で保存対象へ含める拡張カラム
+# add_missing_columns.sql 실행 후 자동으로 저장 대상에 포함되는 확장 컬럼
 TAT_EXTENDED_COLUMNS = [
-    "kddi_uq_must", "req_receive_date", "req_repair_in_date", "ret_repaired_out_date",
-    "center_tat", "center_must", "countermeasure2", "du_ru_type", "pba_name",
-    "pba_recv_date", "pba_re_recv_date", "repair_pos", "ship_status",
-    "remark", "pba_in", "pba_out", "pba_open_close", "sub_alarm", "sub_date", "summary_use"
+    "kddi_uq_tat", "kddi_uq_must", "req_receive_date", "req_repair_in_date",
+    "ret_repaired_out_date", "center_tat", "center_must", "countermeasure2",
+    "du_ru_type", "pba_name", "pba_recv_date", "pba_re_recv_date",
+    "repair_pos", "ship_status", "remark", "pba_in", "pba_out",
+    "pba_open_close", "sub_alarm", "sub_date", "summary_use", "delay_reason"
 ]
 
+# 판별 결과 캐시 (폴링/업로드가 같은 판별을 반복하지 않도록)
+_live_col_cache: dict = {}
+
 def _probe_existing_columns(table_name: str, candidates: List[str]) -> set:
-    """候補カラムの中で実テーブルに存在するものだけを抽出して返す"""
+    """후보 컬럼 중 실제 테이블에 존재하는 것만 추려서 반환 (결과 캐시)"""
+    cached = _live_col_cache.get(table_name)
+    if cached is not None:
+        return cached
     remaining = list(candidates)
     existing: List[str] = []
     for _ in range(len(candidates) + 1):
@@ -101,10 +117,12 @@ def _probe_existing_columns(table_name: str, candidates: List[str]) -> set:
             if not m: break
             missing = m.group(1)
             if missing in remaining: remaining.remove(missing)
+    if existing:
+        _live_col_cache[table_name] = set(existing)
     return set(existing)
 
 def _filter_records_by_live_columns(records: List[dict], table_name: str, core_columns: List[str], extended_columns: List[str]) -> List[dict]:
-    """実在カラムのみを含むようにレコードを絞り込む(判定できない場合はコアカラムのみ)"""
+    """존재하는 컬럼만 포함하도록 레코드를 정제 (판별 실패 시 기본 컬럼만)"""
     live = _probe_existing_columns(table_name, core_columns + extended_columns)
     allowed = live if live else set(core_columns)
     if not live:
@@ -118,8 +136,8 @@ def _chunked_list(seq: List[Any], size: int = 500):
         yield seq[i:i + size]
 
 def _upsert_with_fallback(table_name: str, records: List[dict], conflict_col: str) -> None:
-    """一括 upsert 失敗時(on_conflict 対象列にユニーク制約がない等)は
-    既存キーの照合による手動 upsert に切り替えて保存する"""
+    """일괄 upsert 실행 실패 시(on_conflict 대상 컬럼에 유니크 제약이 없는 경우 등)
+    기존 키 조회 방식의 수동 upsert로 전환해서 저장한다"""
     try:
         supabase.table(table_name).upsert(records, on_conflict=conflict_col).execute()
         return
@@ -160,7 +178,9 @@ async def get_tat_data():
         for r in all_data:
             repair_in = clean_date_str(r.get("req_repair_in_date") or r.get("req_receive_date"))
             cust = r.get("customer", "")
+            # 事業者TAT: 엑셀 H열 값 우선, 없으면 입고일 기준 계산값(주말/공휴일 포함 달력일수)
             carrier_dl = r.get("kddi_uq_must") or r.get("carrier_deadline") or calculate_carrier_deadline(repair_in, cust)
+            # 13日TAT: 엑셀 M열 값 우선, 없으면 입고일 기준 계산값(주말/공휴일 제외 영업일 13일)
             tat13_dl = r.get("center_must") or r.get("tat13_deadline") or calculate_13_working_days_deadline(repair_in)
 
             result.append({
@@ -189,6 +209,8 @@ async def get_tat_data():
                 "pbaName": r.get("pba_name", ""),
                 "pbaRecvDate": clean_date_str(r.get("pba_recv_date")),
                 "pbaReRecvDate": clean_date_str(r.get("pba_re_recv_date")),
+                # 대장관리 기능과 동일한 이름(period_return_can)으로 연동되는 체크값
+                "periodReturnCan": bool(r.get("period_return_can")),
                 "repairPos": r.get("repair_pos", ""),
                 "shipStatus": r.get("ship_status", ""),
                 "remark": r.get("remark", ""),
@@ -199,6 +221,8 @@ async def get_tat_data():
                 "subAlarm": r.get("sub_alarm", ""),
                 "subDate": clean_date_str(r.get("sub_date")),
                 "summaryUse": r.get("summary_use", ""),
+                # 대장관리 기능과 동일한 이름(delay_reason)으로 연동되는 지연 사유
+                "delayReason": r.get("delay_reason", ""),
                 "reason": r.get("reason", "")
             })
         return result
@@ -227,45 +251,54 @@ async def upload_excel(file: UploadFile = File(...)):
             sn_val = safe_cell(row, 4)
             repair_in = clean_date_str(safe_cell(row, 9)) or clean_date_str(safe_cell(row, 8))
 
+            # W열 (Col 22: 수리가능여부 O, X) -> 대장관리와 동일한 이름 period_return_can 으로 저장
+            can_return_raw = safe_cell(row, 22).strip()
+
             records.append({
-                "wq": wq_val,
-                "customer": cust,
-                "tech_category": safe_cell(row, 2),
-                "product_category": safe_cell(row, 3),
-                "sn": sn_val,
-                "defect_type": safe_cell(row, 5, "Function / Performance Defect"),
-                "over_category": safe_cell(row, 6),
-                "kddi_uq_must": safe_cell(row, 7),
-                "req_receive_date": clean_date_str(safe_cell(row, 8)),
-                "req_repair_in_date": repair_in,
-                "ret_repaired_out_date": clean_date_str(safe_cell(row, 10)),
-                "center_tat": safe_cell(row, 11),
-                "center_must": safe_cell(row, 12),
-                "status": safe_cell(row, 13),
-                "reproduce_detail": safe_cell(row, 14),
-                "fault_location": safe_cell(row, 15),
-                "countermeasure2": safe_cell(row, 16),
-                "sys_manager": safe_cell(row, 17),
-                "du_ru_type": safe_cell(row, 18),
-                "pba_name": safe_cell(row, 19),
-                "pba_recv_date": clean_date_str(safe_cell(row, 20)),
-                "pba_re_recv_date": clean_date_str(safe_cell(row, 21)),
-                "repair_pos": safe_cell(row, 23),
-                "ship_status": safe_cell(row, 24),
-                "remark": safe_cell(row, 25),
-                "pba_in": clean_date_str(safe_cell(row, 26)),
-                "pba_out": clean_date_str(safe_cell(row, 27)),
-                "pba_open_close": safe_cell(row, 28),
-                # 実テーブルの担当カラムに計算値を保存(画面表示がこの値を優先使用)
+                # A열 ~ AG열: 엑셀 원본과 동일하게 전체 저장
+                "wq": wq_val,                                                          # A
+                "customer": cust,                                                      # B
+                "tech_category": safe_cell(row, 2),                                    # C
+                "product_category": safe_cell(row, 3),                                 # D
+                "sn": sn_val,                                                          # E
+                "defect_type": safe_cell(row, 5, "Function / Performance Defect"),     # F
+                "kddi_uq_tat": safe_cell(row, 6),                                      # G
+                "kddi_uq_must": clean_date_str(safe_cell(row, 7)),                     # H (事業者TAT 표시 우선값)
+                "req_receive_date": clean_date_str(safe_cell(row, 8)),                 # I
+                "req_repair_in_date": repair_in,                                       # J (TAT 계산 기준 입고일)
+                "ret_repaired_out_date": clean_date_str(safe_cell(row, 10)),           # K
+                "over_category": safe_cell(row, 11),                                   # L (超過区分 표시값)
+                "center_tat": safe_cell(row, 11),                                      # L (동일 값)
+                "center_must": clean_date_str(safe_cell(row, 12)),                     # M (13日TAT 표시 우선값)
+                "status": safe_cell(row, 13),                                          # N
+                "reproduce_detail": safe_cell(row, 14),                                # O
+                "fault_location": safe_cell(row, 15),                                  # P
+                "countermeasure2": safe_cell(row, 16),                                 # Q
+                "sys_manager": safe_cell(row, 17),                                     # R
+                "du_ru_type": safe_cell(row, 18),                                      # S
+                "pba_name": safe_cell(row, 19),                                        # T
+                "pba_recv_date": clean_date_str(safe_cell(row, 20)),                   # U
+                "pba_re_recv_date": clean_date_str(safe_cell(row, 21)),                # V
+                "period_return_can": can_return_raw.upper() in ["O", "OK", "TRUE", "1", "YES"],  # W
+                "repair_pos": safe_cell(row, 23),                                      # X
+                "ship_status": safe_cell(row, 24),                                     # Y
+                "remark": safe_cell(row, 25),                                          # Z
+                # AA열(PBA_IN) -> 대장관리와 동일한 이름 delay_reason 으로 저장 (遅延理由 표시값)
+                "delay_reason": safe_cell(row, 26),                                    # AA
+                "pba_in": clean_date_str(safe_cell(row, 26)),                          # AA (원본 동일 저장용)
+                "pba_out": clean_date_str(safe_cell(row, 27)),                         # AB
+                "pba_open_close": safe_cell(row, 28),                                  # AC
+                "flag_mark": safe_cell(row, 29),                                       # AD
+                "sub_alarm": safe_cell(row, 30),                                       # AE
+                "sub_date": clean_date_str(safe_cell(row, 31)),                        # AF
+                "summary_use": safe_cell(row, 32),                                     # AG
+                # 입고일(J열) 기준 계산값: H/M열이 비어 있을 때 표시 폴백으로 사용
                 "carrier_deadline": calculate_carrier_deadline(repair_in, cust),
-                "tat13_deadline": calculate_13_working_days_deadline(repair_in),
-                "flag_mark": safe_cell(row, 29),
-                "sub_alarm": safe_cell(row, 30),
-                "sub_date": clean_date_str(safe_cell(row, 31)),
-                "summary_use": safe_cell(row, 32)
+                "tat13_deadline": calculate_13_working_days_deadline(repair_in)
             })
 
         if records:
+            # 존재하지 않는 컬럼은 자동으로 제외한 뒤 저장
             filtered = _filter_records_by_live_columns(records, "tat_data", TAT_CORE_COLUMNS, TAT_EXTENDED_COLUMNS)
             filtered = [r for r in filtered if r.get("wq")]
             if filtered:
