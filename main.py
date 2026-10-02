@@ -1,6 +1,6 @@
 import os
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -24,6 +24,11 @@ app.include_router(auth.router)
 app.include_router(tat_service.router)
 app.include_router(ledger_service.router)
 app.include_router(inquiry_service.router)
+
+# 監視サービスのHEADリクエストに応答します。
+@app.head("/")
+async def monitor_head():
+    return Response(status_code=200)
 
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
